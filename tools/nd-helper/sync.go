@@ -104,6 +104,14 @@ type SyncTask struct {
 	startedAt time.Time
 	finished  time.Time
 	errMsg    string
+	// stage 当前阶段（starting/preflight/enumerate/download/done/failed），
+	// stageAt 该阶段的开始时间。同步里有「枚举远端目录」「文件已存在被跳过」这类长时间
+	// 计数不变化的阶段，只暴露 filesDone/total 会让用户误以为任务卡死，因此额外上报阶段与阶段耗时。
+	stage   string
+	stageAt time.Time
+	// dirsTotal/dirsDone 目录级进度：下载阶段按「远端父目录」分批执行，用目录数反映真实推进。
+	dirsTotal int
+	dirsDone  int
 	// total 本次计划同步的文件数；logStart 本次开始的日志偏移；logPath 本次的日志文件。
 	total    int
 	logStart int64
@@ -115,6 +123,28 @@ func (t *SyncTask) setPlan(total int, logStart int64) {
 	t.mu.Lock()
 	t.total = total
 	t.logStart = logStart
+	t.mu.Unlock()
+}
+
+// setStage 切换当前阶段（供前端显示「正在做什么」，避免看起来像卡死）。
+func (t *SyncTask) setStage(stage string) {
+	t.mu.Lock()
+	t.stage = stage
+	t.stageAt = time.Now()
+	t.mu.Unlock()
+}
+
+// setDirs 记录下载阶段的目录总数。
+func (t *SyncTask) setDirs(total int) {
+	t.mu.Lock()
+	t.dirsTotal = total
+	t.mu.Unlock()
+}
+
+// incDir 完成一个目录的下载批次后推进目录进度。
+func (t *SyncTask) incDir() {
+	t.mu.Lock()
+	t.dirsDone++
 	t.mu.Unlock()
 }
 
@@ -132,20 +162,32 @@ func (t *SyncTask) snapshot() map[string]any {
 	t.mu.Lock()
 	total, logStart, logPath := t.total, t.logStart, t.logPath
 	t.mu.Unlock()
-	done := countDoneSince(logPath, logStart)
+	done, skipped := countProgressSince(logPath, logStart)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	stageElapsed := 0
+	if !t.stageAt.IsZero() {
+		stageElapsed = int(time.Since(t.stageAt).Seconds())
+	}
 	res := map[string]any{
 		"running":   t.running,
 		"mode":      t.mode,
 		"trigger":   t.trigger,
 		"types":     t.types,
+		"stage":     t.stage,
 		"startedAt": t.startedAt,
 		"elapsed":   int(time.Since(t.startedAt).Seconds()),
-		"filesDone": done,
-		"filesSeen": total,
-		"errMsg":    t.errMsg,
+		// filesProcessed = 已下载 + 已跳过：增量同步下绝大多数文件都是「已存在跳过」，
+		// 只用 filesDone 会让进度长时间停在 0/N（用户以为卡死）。
+		"filesDone":      done,
+		"filesSkipped":   skipped,
+		"filesProcessed": done + skipped,
+		"filesSeen":      total,
+		"dirsDone":       t.dirsDone,
+		"dirsTotal":      t.dirsTotal,
+		"stageElapsed":   stageElapsed,
+		"errMsg":         t.errMsg,
 	}
 	if !t.running && !t.finished.IsZero() {
 		res["finishedAt"] = t.finished
@@ -154,31 +196,49 @@ func (t *SyncTask) snapshot() map[string]any {
 }
 
 // countDoneSince 统计 from 之后新增日志里「下载完成」的唯一文件数。
+// 保留该函数是为了兼容既有单测，实际统计逻辑见 countProgressSince。
 func countDoneSince(path string, from int64) int {
+	done, _ := countProgressSince(path, from)
+	return done
+}
+
+// countProgressSince 统计 from 之后新增日志里「已下载」与「已跳过（文件已存在）」的唯一文件数。
+//
+// 为什么要单独统计跳过数：增量同步时本地已是最新，baidupcs 对每个文件都会输出「文件已经存在…跳过」，
+// 这些文件其实已经被处理过，不计入进度就会出现「进度长时间 0/425」的假卡死现象。
+func countProgressSince(path string, from int64) (done int, skipped int) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	defer f.Close()
 	if _, err := f.Seek(from, io.SeekStart); err != nil {
-		return 0
+		return 0, 0
 	}
-	seen := map[string]bool{}
+	donePaths := map[string]bool{}
+	skipPaths := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
-		idx := strings.Index(line, "保存位置: ")
-		if idx < 0 {
-			continue
+		if idx := strings.Index(line, "保存位置: "); idx >= 0 {
+			if p := strings.TrimSpace(line[idx+len("保存位置: "):]); p != "" {
+				donePaths[p] = true
+			}
 		}
-		p := strings.TrimSpace(line[idx+len("保存位置: "):])
-		if p == "" {
-			continue
+		// 跳过行形如「[1] 文件已经存在: /opt/navidrome/music/xx.lrc, 跳过...」，
+		// 用「, 跳过」截断尾部提示，只取文件路径去重。
+		if idx := strings.Index(line, "文件已经存在: "); idx >= 0 {
+			p := line[idx+len("文件已经存在: "):]
+			if cut := strings.Index(p, ","); cut >= 0 {
+				p = p[:cut]
+			}
+			if p = strings.TrimSpace(p); p != "" {
+				skipPaths[p] = true
+			}
 		}
-		seen[p] = true
 	}
-	return len(seen)
+	return len(donePaths), len(skipPaths)
 }
 
 // countProgress 统计日志里的下载完成/准备下载条数，给出粗略进度。
@@ -220,7 +280,8 @@ func (s *Server) actionSyncStart(mode string, types []string, trigger string) (a
 	if len(types) == 0 {
 		types = defaultTypes(cfg)
 	}
-	task := &SyncTask{mode: mode, trigger: trigger, types: types, startedAt: time.Now(), running: true}
+	task := &SyncTask{mode: mode, trigger: trigger, types: types, startedAt: time.Now(), running: true,
+		stage: "starting", stageAt: time.Now()}
 	// 一开始就把日志起点与日志文件定下来：枚举阶段（尚未知道计划数）也不能把历次运行算进来
 	task.logPath = syncLogPathFor(time.Now())
 	task.logStart = fileSize(task.logPath)
@@ -256,6 +317,11 @@ func (s *Server) runSync(task *SyncTask, cfg Config) {
 		task.errMsg = err.Error()
 	}
 	task.mu.Unlock()
+	if err != nil {
+		task.setStage("failed")
+	} else {
+		task.setStage("done")
+	}
 
 	s.mu.Lock()
 	s.state.LastSyncEnd = task.finished
@@ -299,6 +365,7 @@ func (s *Server) execSync(task *SyncTask, cfg Config) error {
 	}
 	// 预检远端目录：baidupcs 遇到不存在的目录或网络故障时，download 会「零输出 + 退出码 0」，
 	// 只靠事后扫日志会把这种情况误判成“同步完成”，所以同步前先 ls 一次探明。
+	task.setStage("preflight")
 	if err := s.preflightRemote(cfg); err != nil {
 		return err
 	}
@@ -321,14 +388,24 @@ func (s *Server) execSync(task *SyncTask, cfg Config) error {
 	// 同步范围严格限制在「远端根目录内的歌曲/歌词/封面」：
 	// 先枚举远端文件，排除配置里指定的目录（如 attachments），再按扩展名白名单筛选，
 	// 绝不整目录抓取，避免把无关文件带进媒体库。
+	// 枚举远端目录可能耗时较久（整棵目录树），必须先切阶段，前端才能显示「正在枚举」而不是静默不动。
+	task.setStage("enumerate")
 	paths, err := s.listRemoteFiles(cfg)
 	if err != nil {
 		return err
 	}
 	scoped, skippedDir := filterOutDirs(paths, cfg)
 	wanted := filterByTypes(scoped, cfg, task.types)
-	fmt.Fprintf(logFile, "范围：远端共 %d 个文件，排除目录跳过 %d 个，符合歌曲/歌词/封面要求的 %d 个\n",
-		len(paths), skippedDir, len(wanted))
+	matched := len(wanted)
+	// 单次同步文件数上限（limitFiles，默认 0 = 不限）：验证阶段只跑十几首，不必整库扫一遍。
+	// 正式运行务必保持 0，否则排在后面的新歌永远同步不到。
+	limitNote := ""
+	if cfg.LimitFiles > 0 && len(wanted) > cfg.LimitFiles {
+		wanted = wanted[:cfg.LimitFiles]
+		limitNote = fmt.Sprintf("，按 limitFiles=%d 限制为前 %d 个", cfg.LimitFiles, len(wanted))
+	}
+	fmt.Fprintf(logFile, "范围：远端共 %d 个文件，排除目录跳过 %d 个，符合歌曲/歌词/封面要求的 %d 个%s\n",
+		len(paths), skippedDir, matched, limitNote)
 	// 本次运行的进度基准：计划总数 + 日志起点（前端只显示本次运行的真实数字）
 	task.setPlan(len(wanted), startSize)
 	if len(wanted) == 0 {
@@ -348,6 +425,8 @@ func (s *Server) execSync(task *SyncTask, cfg Config) error {
 		dirs = append(dirs, d)
 	}
 	sort.Strings(dirs) // 输出稳定，便于排查
+	task.setStage("download")
+	task.setDirs(len(dirs))
 
 	const batch = 100
 	for _, dir := range dirs {
@@ -373,6 +452,7 @@ func (s *Server) execSync(task *SyncTask, cfg Config) error {
 			if err := s.execCmd(task, logFile, cfg.BaidupcsBin, args...); err != nil {
 				return err
 			}
+			task.incDir() // 每个批次完成即推进目录进度
 		}
 	}
 	return scanNewLogErrors(task.logPath, startSize)

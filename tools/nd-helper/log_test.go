@@ -150,3 +150,53 @@ func TestCountDoneSinceCountsUniquePaths(t *testing.T) {
 		t.Errorf("去重后应统计 2 个文件，实际 %d", n)
 	}
 }
+
+// 跳过行也要计入「已处理」：增量同步时本地已是最新，全靠跳过推进，
+// 若不统计会出现进度长时间 0/N 的假卡死现象。
+func TestCountProgressSinceCountsSkippedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log.txt")
+	content := "old\n" +
+		"[1] 下载完成, 保存位置: /m/a.mp3\n" +
+		"[1] 文件已经存在: /m/a.mp3, 跳过...\n" + // 同一文件先失败重试后成功，跳过行不应重复计数
+		"[2] 文件已经存在: /m/b.lrc, 跳过...\n" +
+		"[2] 文件已经存在: /m/b.lrc, 跳过...\n" + // 重复跳过只算一次
+		"[3] 文件已经存在: /m/c.mp3, 跳过...\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done, skipped := countProgressSince(path, int64(len("old\n")))
+	if done != 1 {
+		t.Errorf("应统计 1 个已下载文件，实际 %d", done)
+	}
+	if skipped != 3 {
+		t.Errorf("应统计 3 个跳过文件（去重），实际 %d", skipped)
+	}
+}
+
+// 阶段字段是「看起来卡死」的直接修复：必须有可读的阶段与阶段耗时。
+func TestSnapshotExposesStageAndProcessed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log.txt")
+	if err := os.WriteFile(path, []byte("[1] 文件已经存在: /m/a.mp3, 跳过...\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := &SyncTask{running: true, mode: "incremental", startedAt: time.Now(), logPath: path}
+	task.setPlan(10, 0)
+	task.setStage("download")
+	task.setDirs(3)
+	task.incDir()
+	snap := task.snapshot()
+	if snap["stage"] != "download" {
+		t.Errorf("stage 应为 download，实际 %v", snap["stage"])
+	}
+	if snap["filesProcessed"] != 1 || snap["filesSkipped"] != 1 {
+		t.Errorf("已处理/跳过计数异常: %v/%v", snap["filesProcessed"], snap["filesSkipped"])
+	}
+	if snap["dirsDone"] != 1 || snap["dirsTotal"] != 3 {
+		t.Errorf("目录进度异常: %v/%v", snap["dirsDone"], snap["dirsTotal"])
+	}
+	if _, ok := snap["stageElapsed"]; !ok {
+		t.Error("快照必须包含 stageElapsed")
+	}
+}

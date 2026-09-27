@@ -10,7 +10,18 @@
       },
       "task": {
         "running": "同步中",
-        "idle": "空闲"
+        "idle": "空闲",
+        "progress": "已处理 %{done}/%{total}",
+        "skipped": "跳过 %{count}",
+        "seconds": "%{seconds} 秒"
+      },
+      "stages": {
+        "starting": "正在准备同步…",
+        "preflight": "正在检查网盘目录…",
+        "enumerate": "正在枚举网盘文件…",
+        "download": "正在下载（已存在的文件自动跳过）…",
+        "done": "同步完成",
+        "failed": "同步失败"
       },
       "lastSync": "上次同步",
       "nextRun": "下次计划",
@@ -33,6 +44,8 @@
         "retentionDays": "回收站保留天数",
         "logRetentionDays": "日志保留天数",
         "logRetentionDaysHint": "日志按天分开存放，超期自动清理",
+        "limitFiles": "单次同步文件数上限",
+        "limitFilesHint": "0 表示不限；仅在验证时填小值（如 10），正式运行请保持 0",
         "remoteTrashDir": "网盘回收目录",
         "excludeDirs": "排除目录（逗号分隔）",
         "excludeDirsHint": "相对网盘路径；这些目录不扫描、不下载（只同步歌曲/歌词/封面）",

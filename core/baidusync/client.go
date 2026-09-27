@@ -130,6 +130,8 @@ type Config struct {
 	RetentionDays  int      `json:"retentionDays"`
 	// LogRetentionDays 同步日志（按天分文件）保留天数，默认 7。
 	LogRetentionDays int `json:"logRetentionDays"`
+	// LimitFiles 单次同步最多处理的文件数（0 = 不限）。仅用于验证阶段减少等待，正式运行留 0。
+	LimitFiles int `json:"limitFiles"`
 }
 
 // Login 百度登录态。
@@ -141,16 +143,26 @@ type Login struct {
 }
 
 // Task 同步任务状态。
+//
+// Stage 表示当前阶段（starting/preflight/enumerate/download/done/failed）：
+// 枚举远端、以及「文件已存在被跳过」这两个阶段耗时较长但计数变化很小，
+// 前端据此展示「正在做什么」，避免进度条长时间不动被误认为卡死。
 type Task struct {
-	Running   bool     `json:"running"`
-	Mode      string   `json:"mode"`
-	Trigger   string   `json:"trigger"`
-	Types     []string `json:"types"`
-	Elapsed   int      `json:"elapsed"`
-	FilesDone int      `json:"filesDone"`
-	FilesSeen int      `json:"filesSeen"`
-	ErrMsg    string   `json:"errMsg"`
-	StartedAt string   `json:"startedAt"`
+	Running        bool     `json:"running"`
+	Mode           string   `json:"mode"`
+	Trigger        string   `json:"trigger"`
+	Types          []string `json:"types"`
+	Stage          string   `json:"stage"`
+	StageElapsed   int      `json:"stageElapsed"`
+	Elapsed        int      `json:"elapsed"`
+	FilesDone      int      `json:"filesDone"`
+	FilesSkipped   int      `json:"filesSkipped"`
+	FilesProcessed int      `json:"filesProcessed"`
+	FilesSeen      int      `json:"filesSeen"`
+	DirsDone       int      `json:"dirsDone"`
+	DirsTotal      int      `json:"dirsTotal"`
+	ErrMsg         string   `json:"errMsg"`
+	StartedAt      string   `json:"startedAt"`
 }
 
 // Status 助手整体状态。

@@ -10,7 +10,18 @@
       },
       "task": {
         "running": "Syncing",
-        "idle": "Idle"
+        "idle": "Idle",
+        "progress": "%{done}/%{total} processed",
+        "skipped": "%{count} skipped",
+        "seconds": "%{seconds}s"
+      },
+      "stages": {
+        "starting": "Preparing sync…",
+        "preflight": "Checking netdisk folder…",
+        "enumerate": "Listing netdisk files…",
+        "download": "Downloading (existing files are skipped)…",
+        "done": "Sync finished",
+        "failed": "Sync failed"
       },
       "lastSync": "Last sync",
       "nextRun": "Next scheduled",
@@ -32,6 +43,8 @@
         "parallelFiles": "Parallel files",
         "retentionDays": "Recycle bin retention (days)",
         "logRetentionDays": "Log retention (days)",
+        "limitFiles": "Max files per sync",
+        "limitFilesHint": "0 = unlimited. Set a small number (e.g. 10) only for verification runs.",
         "logRetentionDaysHint": "Logs are split per day; older files are deleted automatically",
         "remoteTrashDir": "Netdisk recycle folder",
         "excludeDirs": "Excluded folders (comma separated)",

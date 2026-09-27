@@ -9,6 +9,7 @@ import {
   Divider,
   FormControlLabel,
   Grid,
+  LinearProgress,
   MenuItem,
   Switch,
   Table,
@@ -44,7 +45,25 @@ const useStyles = makeStyles((theme) => ({
   row: { display: 'flex', alignItems: 'center', gap: theme.spacing(1) },
   logDate: { minWidth: 160, marginLeft: theme.spacing(2) },
   statusChip: { marginRight: theme.spacing(1) },
+  progress: { marginTop: theme.spacing(1) },
 }))
+
+// 进度文案：已处理 = 已下载 + 已跳过。
+// 增量同步下绝大多数文件是「已存在跳过」，若只显示下载数，进度会长时间停在 0/N（看起来像卡死）。
+const progressText = (translate, task) =>
+  translate('resources.sync.task.progress', {
+    done: task.filesProcessed || 0,
+    total: task.filesSeen || 0,
+  })
+
+// 阶段文案：非下载阶段没有计数变化，靠阶段名 + 阶段耗时证明任务仍在推进。
+const stageText = (translate, task) => {
+  const key = task.stage || 'starting'
+  const label = translate(`resources.sync.stages.${key}`)
+  return task.stageElapsed
+    ? `${label} · ${translate('resources.sync.task.seconds', { seconds: task.stageElapsed })}`
+    : label
+}
 
 // toForm / fromForm：在「配置对象」与「表单字段」之间转换（数字与定时子对象需要拆平）。
 const toForm = (c) => ({
@@ -65,6 +84,7 @@ const toForm = (c) => ({
   remoteTrashDir: c.remoteTrashDir,
   retentionDays: String(c.retentionDays),
   logRetentionDays: String(c.logRetentionDays || 7),
+  limitFiles: String(c.limitFiles || 0),
   scheduleEnabled: c.schedule && c.schedule.enabled,
   scheduleMode: (c.schedule && c.schedule.mode) || 'daily',
   scheduleAt: (c.schedule && c.schedule.at) || '03:00',
@@ -92,6 +112,7 @@ const fromForm = (f) => ({
   remoteTrashDir: f.remoteTrashDir,
   retentionDays: parseInt(f.retentionDays, 10) || 0,
   logRetentionDays: parseInt(f.logRetentionDays, 10) || 0,
+  limitFiles: parseInt(f.limitFiles, 10) || 0,
   schedule: {
     enabled: f.scheduleEnabled,
     mode: f.scheduleMode,
@@ -298,7 +319,11 @@ const Sync = () => {
             variant="outlined"
             label={
               task.running
-                ? `${translate('resources.sync.task.running')} · ${task.filesDone || 0}/${task.filesSeen || 0}`
+                ? `${translate('resources.sync.task.running')} · ${progressText(translate, task)}${
+                    task.filesSkipped
+                      ? ` (${translate('resources.sync.task.skipped', { count: task.filesSkipped })})`
+                      : ''
+                  }`
                 : translate('resources.sync.task.idle')
             }
           />
@@ -353,6 +378,29 @@ const Sync = () => {
             label={translate('resources.sync.actions.autoRefresh')}
           />
         </div>
+
+        {/* ---------- 同步进度 ---------- */}
+        {/* filesSeen 为 0 时说明还在预检/枚举阶段，用不确定进度条 + 阶段文案表示“正在干活” */}
+        {task.running && (
+          <div className={classes.section}>
+            <Typography variant="body2" gutterBottom>
+              {stageText(translate, task)}
+            </Typography>
+            <LinearProgress
+              variant={task.filesSeen > 0 ? 'determinate' : 'indeterminate'}
+              value={
+                task.filesSeen > 0
+                  ? Math.min(
+                      100,
+                      Math.round(
+                        ((task.filesProcessed || 0) / task.filesSeen) * 100
+                      )
+                    )
+                  : 0
+              }
+            />
+          </div>
+        )}
 
         <Divider className={classes.section} />
 
@@ -497,6 +545,18 @@ const Sync = () => {
                 label={translate('resources.sync.config.remoteTrashDir')}
                 value={form.remoteTrashDir}
                 onChange={setField('remoteTrashDir')}
+              />
+            </Grid>
+            <Grid item xs={6} md={3}>
+              {/* 验证用：只同步前 N 个文件，避免每次验证都整库跑好几分钟 */}
+              <TextField
+                fullWidth
+                variant="outlined"
+                type="number"
+                label={translate('resources.sync.config.limitFiles')}
+                helperText={translate('resources.sync.config.limitFilesHint')}
+                value={form.limitFiles}
+                onChange={setField('limitFiles')}
               />
             </Grid>
 

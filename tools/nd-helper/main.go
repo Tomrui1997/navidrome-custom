@@ -68,6 +68,9 @@ type Config struct {
 	RetentionDays  int      `json:"retentionDays"`
 	// LogRetentionDays 同步日志（按天分文件）保留天数，默认 7。
 	LogRetentionDays int `json:"logRetentionDays"`
+	// LimitFiles 单次同步最多处理的文件数（0 或不填 = 不限）。
+	// 用途：验证阶段只想跑十几首验证流程，不必整库扫一遍（整库要等几分钟且白跑流量）。
+	LimitFiles int `json:"limitFiles"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -94,6 +97,8 @@ func DefaultConfig() Config {
 		RetentionDays:  30,
 		// 日志按天分文件，默认保留 7 天（避免单文件过大导致页面打开卡死）
 		LogRetentionDays: 7,
+		// 默认不限制文件数（正式运行必须全量增量对比）；测试时可在页面改成 10 左右
+		LimitFiles: 0,
 	}
 }
 
@@ -151,6 +156,10 @@ func main() {
 	if err := s.loadState(); err != nil {
 		log.Printf("加载状态失败（忽略，使用默认）: %v", err)
 	}
+	// 上次同步「已开始但未结束」说明进程在同步途中被杀（重启/崩溃/被强杀）。
+	// 必须显式标注中断：否则前端只显示上一次成功时间，看起来像任务还在跑或无声失败，
+	// 用户无法判断到底该等待还是该重跑。
+	s.markInterruptedSync()
 	// 清理超期回收站内容（后台，不阻塞启动）
 	go s.cleanupTrashLoop()
 	// 日志按天分文件：启动时先清一次过期日志
@@ -225,6 +234,20 @@ func (s *Server) saveStateLocked() {
 		return
 	}
 	_ = atomicWrite(s.statePath, append(b, '\n'), 0o600)
+}
+
+// markInterruptedSync 检测并标记「上次同步未正常结束」（进程被杀导致的静默中断）。
+func (s *Server) markInterruptedSync() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.LastSyncStart.IsZero() || !s.state.LastSyncEnd.Before(s.state.LastSyncStart) {
+		return
+	}
+	s.state.LastSyncEnd = s.state.LastSyncStart
+	s.state.LastSyncOK = false
+	s.state.LastSyncMsg = "上次同步被中断（服务重启），请重新执行同步"
+	s.saveStateLocked()
+	log.Printf("检测到上次同步被中断（开始于 %s），已标记状态", s.state.LastSyncStart.Format("2006-01-02 15:04:05"))
 }
 
 // atomicWrite 先写临时文件再 rename，避免半截文件。
@@ -477,6 +500,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.LogRetentionDays < 0 || cfg.LogRetentionDays > 365 {
 		return errors.New("logRetentionDays 需在 0-365 之间（0 表示用默认 7 天）")
+	}
+	if cfg.LimitFiles < 0 || cfg.LimitFiles > 100000 {
+		return errors.New("limitFiles 需在 0-100000 之间（0 表示不限制）")
 	}
 	// 规范化排除目录：去空格、去首尾斜杠、去重，只允许相对路径
 	cleaned := make([]string, 0, len(cfg.ExcludeDirs))
