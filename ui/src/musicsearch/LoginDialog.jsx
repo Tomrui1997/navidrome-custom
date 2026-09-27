@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
+import { QRCodeSVG } from 'qrcode.react'
 import { useNotify, useTranslate } from 'react-admin'
 import * as api from './api'
 
@@ -51,14 +52,28 @@ const useStyles = makeStyles((theme) => ({
   qrImg: {
     width: 200,
     height: 200,
-    border: '1px solid #e0e0e0',
+    border: `1px solid ${theme.palette.divider}`,
     borderRadius: 4,
     imageRendering: 'pixelated',
   },
+  // 链接型平台（酷狗 / 网易云 / B站）在本地渲染的二维码。
+  // 注意：必须显式给白底 —— 深色主题下 SVG 背景透明会导致手机扫不出来。
+  qrSvg: {
+    width: 200,
+    height: 200,
+    borderRadius: 4,
+    border: `1px solid ${theme.palette.divider}`,
+    background: '#ffffff',
+  },
+  // 展示登录链接。
+  // 颜色必须取自主题：原实现硬编码浅色背景且未设文字色，在深色主题下会继承白色文字 →
+  // 形成「白底白字」完全看不见（真实缺陷）。
   linkBox: {
     width: '100%',
     wordBreak: 'break-all',
-    background: '#f5f5f5',
+    background: theme.palette.background.default,
+    color: theme.palette.text.primary,
+    border: `1px solid ${theme.palette.divider}`,
     padding: theme.spacing(1),
     borderRadius: 4,
     fontSize: 12,
@@ -76,8 +91,10 @@ const useStyles = makeStyles((theme) => ({
 //
 // 说明：
 //   - QQ / QQ微信 上游直接返回二维码图片（data URI 或微信图片 URL），直接展示；
-//   - 网易云 / 酷狗 / Bilibili 上游只返回 h5 登录链接，此处展示链接（手机打开即完成确认登录），
-//     不额外引入二维码生成依赖。
+//   - 网易云 / 酷狗 / Bilibili 上游只返回 h5 登录链接 → 用 qrcode.react **本地**渲染成二维码，
+//     手机扫码即完成确认登录。**不引导用户在电脑上打开该链接**：实测电脑打开会被平台跳到
+//     App 下载页（非登录页），且该链接本就是给手机用的。
+//   - 二维码在本地生成，不依赖任何外部服务（登录链接含一次性 token，不能外传给第三方）。
 //   - 登录成功后上游会自动把 Cookie 写入服务端文件，前端拿不到也不需要拿到凭据。
 const LoginDialog = ({ open, onClose, onChanged }) => {
   const classes = useStyles()
@@ -248,6 +265,15 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
             <img className={classes.qrImg} src={session.image_url} alt="login qr" />
           ) : session && session.url ? (
             <>
+              <QRCodeSVG
+                className={classes.qrSvg}
+                value={session.url}
+                size={200}
+                level="M"
+                includeMargin
+                bgColor="#ffffff"
+                fgColor="#000000"
+              />
               <Typography variant="body2" color="textSecondary">
                 {translate('resources.musicsearch.login.openOnPhone')}
               </Typography>
@@ -255,15 +281,6 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
               <div className={classes.stateRow}>
                 <Button size="small" variant="outlined" onClick={() => handleCopy(session.url)}>
                   {translate('resources.musicsearch.login.copy')}
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  href={session.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {translate('resources.musicsearch.login.open')}
                 </Button>
               </div>
             </>

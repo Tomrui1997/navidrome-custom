@@ -61,7 +61,7 @@
         "none": "No platform signed in",
         "refresh": "Refresh",
         "placeholder": "Select a platform and click 'Get QR code'",
-        "openOnPhone": "Open this link on your phone to finish signing in:",
+        "openOnPhone": "Scan the QR code above with your phone (or open the link below on your phone) to finish signing in:",
         "copy": "Copy link",
         "open": "Open link",
         "close": "Close",

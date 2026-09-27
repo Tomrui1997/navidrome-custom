@@ -34,6 +34,7 @@
     "lodash.throttle": "^4.1.1",
     "navidrome-music-player": "4.25.4",
     "prop-types": "^15.8.1",
+    "qrcode.react": "^3.1.0",
     "ra-data-json-server": "^3.19.12",
     "ra-i18n-polyglot": "^3.19.12",
     "react": "^17.0.2",
