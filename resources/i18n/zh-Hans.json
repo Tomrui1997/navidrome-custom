@@ -1,6 +1,95 @@
 {
   "languageName": "简体中文",
   "resources": {
+    "sync": {
+      "title": "百度网盘同步",
+      "subtitle": "从百度网盘增量同步歌曲与歌词，删除走回收站更安全",
+      "login": {
+        "loggedIn": "网盘账号",
+        "notLoggedIn": "网盘账号未登录（请先在服务器上登录）"
+      },
+      "task": {
+        "running": "同步中",
+        "idle": "空闲"
+      },
+      "lastSync": "上次同步",
+      "nextRun": "下次计划",
+      "actions": {
+        "syncNow": "立即同步",
+        "syncFull": "全量校验（覆盖）",
+        "cancel": "取消",
+        "autoRefresh": "自动刷新"
+      },
+      "config": {
+        "title": "同步设置",
+        "enabled": "启用同步",
+        "includeLyrics": "包含歌词（.lrc）",
+        "includeCovers": "包含封面图片",
+        "softDelete": "软删除（移入回收站）",
+        "remoteRoot": "网盘路径",
+        "localRoot": "本地音乐目录",
+        "threads": "单文件线程数",
+        "parallelFiles": "并行文件数",
+        "retentionDays": "回收站保留天数",
+        "logRetentionDays": "日志保留天数",
+        "logRetentionDaysHint": "日志按天分开存放，超期自动清理",
+        "remoteTrashDir": "网盘回收目录",
+        "excludeDirs": "排除目录（逗号分隔）",
+        "excludeDirsHint": "相对网盘路径；这些目录不扫描、不下载（只同步歌曲/歌词/封面）",
+        "lockPaths": "锁定路径",
+        "pathLockedHint": "路径已锁定，如需修改请先关闭锁定",
+        "scheduleEnabled": "定时同步",
+        "scheduleMode": "定时模式",
+        "modeDaily": "每天固定时间",
+        "modeInterval": "每 N 分钟",
+        "scheduleAt": "时间（HH:MM）",
+        "scheduleMinutes": "间隔（分钟）"
+      },
+      "log": {
+        "title": "同步日志",
+        "date": "日期",
+        "empty": "暂无日志"
+      },
+      "trash": {
+        "title": "回收站",
+        "titleField": "标题",
+        "path": "路径",
+        "deletedAt": "删除时间",
+        "deletedBy": "操作人",
+        "actions": "操作",
+        "restore": "恢复",
+        "purge": "彻底删除",
+        "empty": "回收站为空"
+      },
+      "deleteDialog": {
+        "title": "确认删除选中的 %{count} 首歌曲？",
+        "scopeLibrary": "从音乐库中移除（删除数据库记录）",
+        "scopeLocal": "删除本地文件",
+        "scopeRemote": "删除百度网盘上的文件（可从网盘回收站恢复）",
+        "softHint": "已开启软删除：文件会移入回收站，可在“同步”页面恢复。",
+        "more": "另有 %{count} 项未显示",
+        "summary": "将处理 %{total} 项",
+        "localLabel": "本地",
+        "remoteLabel": "网盘",
+        "status": {
+          "planned": "待执行",
+          "ok": "已完成",
+          "skipped": "已跳过",
+          "failed": "失败"
+        }
+      },
+      "notifications": {
+        "started": "同步已开始",
+        "cancelled": "同步已取消",
+        "saved": "设置已保存",
+        "restored": "已恢复",
+        "purged": "已彻底删除",
+        "deleted": "已删除 %{count} 项，删除数据库记录 %{db} 条"
+      },
+      "errors": {
+        "adminOnly": "只有管理员可以进行网盘同步管理"
+      }
+    },
     "song": {
       "name": "歌曲",
       "fields": {

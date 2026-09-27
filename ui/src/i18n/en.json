@@ -1,6 +1,95 @@
 {
   "languageName": "English",
   "resources": {
+    "sync": {
+      "title": "Baidu Netdisk Sync",
+      "subtitle": "Incremental sync of songs and lyrics from Baidu Netdisk, with recycle bin for safe deletion",
+      "login": {
+        "loggedIn": "Netdisk account",
+        "notLoggedIn": "Netdisk account not logged in (login on the server first)"
+      },
+      "task": {
+        "running": "Syncing",
+        "idle": "Idle"
+      },
+      "lastSync": "Last sync",
+      "nextRun": "Next scheduled",
+      "actions": {
+        "syncNow": "Sync now",
+        "syncFull": "Full verify (overwrite)",
+        "cancel": "Cancel",
+        "autoRefresh": "Auto refresh"
+      },
+      "config": {
+        "title": "Sync settings",
+        "enabled": "Enable sync",
+        "includeLyrics": "Include lyrics (.lrc)",
+        "includeCovers": "Include covers (images)",
+        "softDelete": "Soft delete (move to recycle bin)",
+        "remoteRoot": "Netdisk path",
+        "localRoot": "Local music folder",
+        "threads": "Threads per file",
+        "parallelFiles": "Parallel files",
+        "retentionDays": "Recycle bin retention (days)",
+        "logRetentionDays": "Log retention (days)",
+        "logRetentionDaysHint": "Logs are split per day; older files are deleted automatically",
+        "remoteTrashDir": "Netdisk recycle folder",
+        "excludeDirs": "Excluded folders (comma separated)",
+        "excludeDirsHint": "Relative to the netdisk path; nothing inside is scanned or downloaded (only songs/lyrics/covers are synced)",
+        "lockPaths": "Lock paths",
+        "pathLockedHint": "Paths are locked; unlock to edit",
+        "scheduleEnabled": "Scheduled sync",
+        "scheduleMode": "Schedule mode",
+        "modeDaily": "Daily at fixed time",
+        "modeInterval": "Every N minutes",
+        "scheduleAt": "Time (HH:MM)",
+        "scheduleMinutes": "Interval (minutes)"
+      },
+      "log": {
+        "title": "Sync log",
+        "date": "Date",
+        "empty": "No log yet"
+      },
+      "trash": {
+        "title": "Recycle bin",
+        "titleField": "Title",
+        "path": "Path",
+        "deletedAt": "Deleted at",
+        "deletedBy": "By",
+        "actions": "Actions",
+        "restore": "Restore",
+        "purge": "Delete forever",
+        "empty": "Recycle bin is empty"
+      },
+      "deleteDialog": {
+        "title": "Delete %{count} selected song(s)?",
+        "scopeLibrary": "Remove from library (database records)",
+        "scopeLocal": "Delete local files",
+        "scopeRemote": "Delete files from Baidu Netdisk (recoverable from netdisk recycle bin)",
+        "softHint": "Soft delete is on: files are moved to the recycle bin and can be restored from the Sync page.",
+        "more": "%{count} more item(s) not shown",
+        "summary": "%{total} item(s) will be processed",
+        "localLabel": "local",
+        "remoteLabel": "netdisk",
+        "status": {
+          "planned": "planned",
+          "ok": "done",
+          "skipped": "skipped",
+          "failed": "failed"
+        }
+      },
+      "notifications": {
+        "started": "Sync started",
+        "cancelled": "Sync cancelled",
+        "saved": "Settings saved",
+        "restored": "Restored",
+        "purged": "Permanently deleted",
+        "deleted": "Deleted %{count} item(s), %{db} database record(s) removed"
+      },
+      "errors": {
+        "adminOnly": "Only administrators can manage Netdisk sync"
+      }
+    },
     "song": {
       "name": "Song |||| Songs",
       "fields": {
@@ -618,6 +707,9 @@
   },
   "menu": {
     "library": "Library",
+    "sync": {
+      "name": "Sync"
+    },
     "librarySelector": {
       "allLibraries": "All Libraries (%{count})",
       "multipleLibraries": "%{selected} of %{total} Libraries",

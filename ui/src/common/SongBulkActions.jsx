@@ -7,6 +7,7 @@ import { BatchPlayButton } from './index'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import { makeStyles } from '@material-ui/core/styles'
 import { BatchShareButton } from './BatchShareButton'
+import DeleteSongsButton from './DeleteSongsButton'
 import config from '../config'
 
 const useStyles = makeStyles((theme) => ({
@@ -48,6 +49,8 @@ export const SongBulkActions = (props) => {
         <BatchShareButton {...props} className={classes.button} />
       )}
       <AddToPlaylistButton {...props} className={classes.button} />
+      {/* 删除歌曲（仅管理员渲染，组件内部已做权限判断） */}
+      <DeleteSongsButton {...props} className={classes.button} />
     </Fragment>
   )
 }

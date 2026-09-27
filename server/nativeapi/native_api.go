@@ -96,6 +96,9 @@ func (api *Router) routes() http.Handler {
 			api.addUserLibraryRoute(r)
 			api.addPluginRoute(r)
 			api.addMetadataRoute(r)
+			// 百度网盘同步与媒体库管理（删除/回收站）：涉及凭据与文件系统写操作，仅管理员
+			api.addBaiduSyncRoute(r)
+			api.addMediaOpsRoute(r)
 			api.RX(r, "/library", api.libs.NewRepository, true)
 		})
 	})

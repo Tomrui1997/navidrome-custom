@@ -1021,7 +1021,8 @@ func setViperDefaults() {
 	viper.SetDefault("enablestarrating", true)
 	viper.SetDefault("enableuserediting", true)
 	viper.SetDefault("defaulttheme", "Dark")
-	viper.SetDefault("defaultlanguage", "")
+	// 自建分支：中文用户为主，默认语言设为简体中文（用户仍可在“个性化”中改回其它语言）
+	viper.SetDefault("defaultlanguage", "zh-Hans")
 	viper.SetDefault("defaultuivolume", consts.DefaultUIVolume)
 	viper.SetDefault("uisearchdebouncems", consts.DefaultUISearchDebounceMs)
 	viper.SetDefault("uicoverartsize", consts.DefaultUICoverArtSize)

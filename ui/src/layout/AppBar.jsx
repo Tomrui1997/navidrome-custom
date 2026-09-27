@@ -18,6 +18,7 @@ import ViewListIcon from '@material-ui/icons/ViewList'
 import { Dialogs } from '../dialogs/Dialogs'
 import { AboutDialog, QuickConnectDialog } from '../dialogs'
 import PersonalMenu from './PersonalMenu'
+import SyncMenu from './SyncMenu'
 import ActivityPanel from './ActivityPanel'
 import NowPlayingPanel from './NowPlayingPanel'
 import UserMenu from './UserMenu'
@@ -132,6 +133,9 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       {config.devActivityPanel && permissions === 'admin' && <ActivityPanel />}
       <UserMenu {...rest}>
         <PersonalMenu sidebarIsOpen={true} onClick={onClick} />
+        {permissions === 'admin' && (
+          <SyncMenu sidebarIsOpen={true} onClick={onClick} />
+        )}
         {config.enableQuickConnect && (
           <DialogMenuItem
             label={translate('menu.quickConnect.name')}
