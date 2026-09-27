@@ -1,6 +1,58 @@
 {
   "languageName": "English",
   "resources": {
+    "musicsearch": {
+      "title": "Online Music Search",
+      "subtitle": "Search songs across music platforms and download them into your library",
+      "health": {
+        "ok": "Search service available",
+        "unavailable": "Search service unavailable",
+        "disabled": "Online search is disabled"
+      },
+      "fields": {
+        "keyword": "Keyword or share link",
+        "sources": "Platforms",
+        "type": "Type",
+        "typeSong": "Songs",
+        "typeAlbum": "Albums",
+        "typePlaylist": "Playlists"
+      },
+      "actions": {
+        "search": "Search",
+        "download": "Download selected",
+        "cancel": "Cancel download",
+        "clear": "Clear",
+        "selectAll": "Select all"
+      },
+      "table": {
+        "title": "Title",
+        "artist": "Artist",
+        "album": "Album",
+        "duration": "Duration",
+        "size": "Size",
+        "bitrate": "Bitrate",
+        "source": "Platform"
+      },
+      "task": {
+        "running": "Downloading",
+        "idle": "Idle",
+        "current": "Current",
+        "skipped": "Skipped",
+        "failed": "Failed",
+        "progress": "%{done}/%{total}"
+      },
+      "notifications": {
+        "searched": "Found %{count} results",
+        "started": "Download started",
+        "cancelled": "Download cancelled",
+        "finished": "Download finished"
+      },
+      "errors": {
+        "adminOnly": "Only administrators can use online search",
+        "emptyKeyword": "Please enter a keyword",
+        "noSelection": "Please select at least one song"
+      }
+    },
     "sync": {
       "title": "Baidu Netdisk Sync",
       "subtitle": "Incremental sync of songs and lyrics from Baidu Netdisk, with recycle bin for safe deletion",
@@ -720,6 +772,9 @@
   },
   "menu": {
     "library": "Library",
+    "musicSearch": {
+      "name": "Online Search"
+    },
     "sync": {
       "name": "Sync"
     },

@@ -19,6 +19,7 @@ import { Dialogs } from '../dialogs/Dialogs'
 import { AboutDialog, QuickConnectDialog } from '../dialogs'
 import PersonalMenu from './PersonalMenu'
 import SyncMenu from './SyncMenu'
+import SearchMenu from './SearchMenu'
 import ActivityPanel from './ActivityPanel'
 import NowPlayingPanel from './NowPlayingPanel'
 import UserMenu from './UserMenu'
@@ -135,6 +136,9 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         <PersonalMenu sidebarIsOpen={true} onClick={onClick} />
         {permissions === 'admin' && (
           <SyncMenu sidebarIsOpen={true} onClick={onClick} />
+        )}
+        {permissions === 'admin' && (
+          <SearchMenu sidebarIsOpen={true} onClick={onClick} />
         )}
         {config.enableQuickConnect && (
           <DialogMenuItem

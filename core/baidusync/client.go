@@ -132,6 +132,55 @@ type Config struct {
 	LogRetentionDays int `json:"logRetentionDays"`
 	// LimitFiles 单次同步最多处理的文件数（0 = 不限）。仅用于验证阶段减少等待，正式运行留 0。
 	LimitFiles int `json:"limitFiles"`
+
+	// ------ 在线搜索（go-music-api）与下载入库 ------ //
+
+	// MusicApiEnabled 在线搜索总开关。
+	MusicApiEnabled bool `json:"musicApiEnabled"`
+	// MusicApiBaseURL go-music-api 服务地址（仅允许回环）。
+	MusicApiBaseURL string `json:"musicApiBaseURL"`
+	// MusicApiSources 默认搜索平台（英文逗号分隔）。
+	MusicApiSources string `json:"musicApiSources"`
+	// MusicApiTimeoutSec 单次接口调用超时（秒）。
+	MusicApiTimeoutSec int `json:"musicApiTimeoutSec"`
+	// EnablePreview 是否允许在线试听（占用服务器出口带宽）。
+	EnablePreview bool `json:"enablePreview"`
+	// DownloadDir 下载入库目录。
+	DownloadDir string `json:"downloadDir"`
+	// DownloadConcurrency 并发下载数。
+	DownloadConcurrency int `json:"downloadConcurrency"`
+	// DownloadOverwrite 同名文件是否覆盖。
+	DownloadOverwrite bool `json:"downloadOverwrite"`
+	// DownloadTypes 下载内容类型：audio / lyric / cover。
+	DownloadTypes []string `json:"downloadTypes"`
+}
+
+// DownloadItem 一首待下载歌曲（前端选中后提交给助手）。
+type DownloadItem struct {
+	ID       string `json:"id"`
+	Source   string `json:"source"`
+	Name     string `json:"name"`
+	Artist   string `json:"artist"`
+	Album    string `json:"album"`
+	Duration int    `json:"duration"`
+	Ext      string `json:"ext"`
+	CoverURL string `json:"coverUrl"`
+}
+
+// DownloadTask 在线下载任务状态。
+type DownloadTask struct {
+	Running   bool     `json:"running"`
+	Types     []string `json:"types"`
+	Total     int      `json:"total"`
+	Done      int      `json:"done"`
+	Skipped   int      `json:"skipped"`
+	Failed    int      `json:"failed"`
+	Processed int      `json:"processed"`
+	Current   string   `json:"current"`
+	Elapsed   int      `json:"elapsed"`
+	ErrMsg    string   `json:"errMsg"`
+	Errors    []string `json:"errors"`
+	StartedAt string   `json:"startedAt"`
 }
 
 // Login 百度登录态。
@@ -167,14 +216,15 @@ type Task struct {
 
 // Status 助手整体状态。
 type Status struct {
-	Login       Login  `json:"login"`
-	Task        Task   `json:"task"`
-	Config      Config `json:"config"`
-	NextRun     string `json:"nextRun"`
-	LastSync    string `json:"lastSync"`
-	LastSyncOK  bool   `json:"lastSyncOK"`
-	LastSyncMsg string `json:"lastSyncMsg"`
-	TrashCount  int    `json:"trashCount"`
+	Login       Login        `json:"login"`
+	Task        Task         `json:"task"`
+	Download    DownloadTask `json:"download"`
+	Config      Config       `json:"config"`
+	NextRun     string       `json:"nextRun"`
+	LastSync    string       `json:"lastSync"`
+	LastSyncOK  bool         `json:"lastSyncOK"`
+	LastSyncMsg string       `json:"lastSyncMsg"`
+	TrashCount  int          `json:"trashCount"`
 }
 
 // DeleteScope 删除范围。

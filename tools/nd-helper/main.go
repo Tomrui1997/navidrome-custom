@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -71,6 +72,28 @@ type Config struct {
 	// LimitFiles 单次同步最多处理的文件数（0 或不填 = 不限）。
 	// 用途：验证阶段只想跑十几首验证流程，不必整库扫一遍（整库要等几分钟且白跑流量）。
 	LimitFiles int `json:"limitFiles"`
+
+	// ------ 在线搜索（go-music-api）与下载入库 ------ //
+
+	// MusicApiEnabled 在线搜索总开关。关闭后助手直接拒绝下载请求。
+	MusicApiEnabled bool `json:"musicApiEnabled"`
+	// MusicApiBaseURL go-music-api 服务地址。**必须是回环地址**（安全约束，见 validateConfig），
+	// 防止把「取直链/下载」指向外部主机造成 SSRF。
+	MusicApiBaseURL string `json:"musicApiBaseURL"`
+	// MusicApiSources 默认搜索平台（英文逗号分隔）。
+	MusicApiSources string `json:"musicApiSources"`
+	// MusicApiTimeoutSec 单次接口调用超时（秒）。
+	MusicApiTimeoutSec int `json:"musicApiTimeoutSec"`
+	// EnablePreview 是否允许在线试听（会占用服务器出口带宽，默认关闭）。
+	EnablePreview bool `json:"enablePreview"`
+	// DownloadDir 下载入库目录。单独子目录，避免与网盘同步的内容互相覆盖。
+	DownloadDir string `json:"downloadDir"`
+	// DownloadConcurrency 并发下载数（保护生产出口带宽）。
+	DownloadConcurrency int `json:"downloadConcurrency"`
+	// DownloadOverwrite 同名文件是否覆盖（默认 false = 跳过，保证增量语义）。
+	DownloadOverwrite bool `json:"downloadOverwrite"`
+	// DownloadTypes 下载内容类型：audio / lyric / cover。
+	DownloadTypes []string `json:"downloadTypes"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -99,6 +122,17 @@ func DefaultConfig() Config {
 		LogRetentionDays: 7,
 		// 默认不限制文件数（正式运行必须全量增量对比）；测试时可在页面改成 10 左右
 		LimitFiles: 0,
+
+		// 在线搜索默认值：地址固定回环（仅本机可访问）；默认不开启在线试听（省带宽）。
+		MusicApiEnabled:     true,
+		MusicApiBaseURL:     "http://127.0.0.1:18080",
+		MusicApiSources:     "netease,kugou,kuwo,migu,qq",
+		MusicApiTimeoutSec:  15,
+		EnablePreview:       false,
+		DownloadDir:         "/opt/navidrome/music/在线音乐",
+		DownloadConcurrency: 2,
+		DownloadOverwrite:   false,
+		DownloadTypes:       []string{"audio", "lyric", "cover"},
 	}
 }
 
@@ -135,6 +169,8 @@ type Server struct {
 	cfg      Config
 	state    State
 	syncTask *SyncTask
+	// downloadTask 在线下载任务（与同步任务相互独立，可并行）
+	downloadTask *DownloadTask
 }
 
 func main() {
@@ -416,6 +452,17 @@ func (s *Server) dispatch(req Request) (any, error) {
 		}
 		_ = json.Unmarshal(req.Params, &p)
 		return s.actionTrashPurge(p.IDs, p.DeleteRemote)
+	case "download_start":
+		var p struct {
+			Items []DownloadItem `json:"items"`
+			Types []string       `json:"types"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return nil, fmt.Errorf("下载参数解析失败: %w", err)
+		}
+		return s.actionDownloadStart(p.Items, p.Types)
+	case "download_cancel":
+		return s.actionDownloadCancel()
 	default:
 		return nil, fmt.Errorf("未知动作: %s", req.Action)
 	}
@@ -428,11 +475,17 @@ func (s *Server) actionStatus() (any, error) {
 	cfg := s.cfg
 	st := s.state
 	task := s.syncTask
+	dlTask := s.downloadTask
 	s.mu.Unlock()
 
 	taskInfo := map[string]any{"running": false}
 	if task != nil && task.isRunning() {
 		taskInfo = task.snapshot()
+	}
+	// 下载任务状态（供页面展示进度）：任务对象存在时返回最近一次的终态快照
+	dlInfo := map[string]any{"running": false}
+	if dlTask != nil {
+		dlInfo = dlTask.snapshot()
 	}
 	// 零值时间不返回，避免前端显示成 1/1/1
 	var lastSync any
@@ -442,6 +495,7 @@ func (s *Server) actionStatus() (any, error) {
 	return map[string]any{
 		"login":       login,
 		"task":        taskInfo,
+		"download":    dlInfo,
 		"config":      cfg,
 		"nextRun":     s.nextRunTime(cfg, st),
 		"lastSync":    lastSync,
@@ -504,6 +558,48 @@ func validateConfig(cfg *Config) error {
 	if cfg.LimitFiles < 0 || cfg.LimitFiles > 100000 {
 		return errors.New("limitFiles 需在 0-100000 之间（0 表示不限制）")
 	}
+	// 在线搜索/下载相关校验：baseURL 必须指向回环，避免 SSRF
+	{
+		u, err := url.Parse(cfg.MusicApiBaseURL)
+		if err != nil || u.Host == "" {
+			return errors.New("musicApiBaseURL 格式不合法")
+		}
+		// 只允许回环：防止把下载/取直链指向外部主机（SSRF）
+		host := u.Hostname()
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			return errors.New("musicApiBaseURL 只允许回环地址（127.0.0.1 / localhost）")
+		}
+	}
+	if cfg.MusicApiTimeoutSec < 5 || cfg.MusicApiTimeoutSec > 60 {
+		return errors.New("musicApiTimeoutSec 需在 5-60 之间")
+	}
+	if cfg.DownloadDir == "" || !filepath.IsAbs(cfg.DownloadDir) {
+		return errors.New("downloadDir 必须是绝对路径")
+	}
+	if strings.Contains(cfg.DownloadDir, "..") {
+		return errors.New("downloadDir 不允许包含 ..")
+	}
+	if cfg.DownloadConcurrency < 1 || cfg.DownloadConcurrency > 8 {
+		return errors.New("downloadConcurrency 需在 1-8 之间")
+	}
+	// 规范化下载类型
+	dt := make([]string, 0, 3)
+	seenDT := map[string]bool{}
+	for _, t := range cfg.DownloadTypes {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t != "audio" && t != "lyric" && t != "cover" {
+			continue
+		}
+		if seenDT[t] {
+			continue
+		}
+		seenDT[t] = true
+		dt = append(dt, t)
+	}
+	if len(dt) == 0 {
+		dt = []string{"audio"}
+	}
+	cfg.DownloadTypes = dt
 	// 规范化排除目录：去空格、去首尾斜杠、去重，只允许相对路径
 	cleaned := make([]string, 0, len(cfg.ExcludeDirs))
 	seen := map[string]bool{}

@@ -1,6 +1,58 @@
 {
   "languageName": "简体中文",
   "resources": {
+    "musicsearch": {
+      "title": "在线音乐搜索",
+      "subtitle": "跨平台搜索歌曲并下载到本地音乐库",
+      "health": {
+        "ok": "搜索服务可用",
+        "unavailable": "搜索服务不可用",
+        "disabled": "在线搜索未启用"
+      },
+      "fields": {
+        "keyword": "关键词或分享链接",
+        "sources": "搜索平台",
+        "type": "搜索类型",
+        "typeSong": "歌曲",
+        "typeAlbum": "专辑",
+        "typePlaylist": "歌单"
+      },
+      "actions": {
+        "search": "搜索",
+        "download": "下载选中",
+        "cancel": "取消下载",
+        "clear": "清空",
+        "selectAll": "全选"
+      },
+      "table": {
+        "title": "标题",
+        "artist": "艺人",
+        "album": "专辑",
+        "duration": "时长",
+        "size": "大小",
+        "bitrate": "码率",
+        "source": "平台"
+      },
+      "task": {
+        "running": "下载中",
+        "idle": "空闲",
+        "current": "当前文件",
+        "skipped": "跳过",
+        "failed": "失败",
+        "progress": "%{done}/%{total}"
+      },
+      "notifications": {
+        "searched": "找到 %{count} 条结果",
+        "started": "下载已开始",
+        "cancelled": "下载已取消",
+        "finished": "下载完成"
+      },
+      "errors": {
+        "adminOnly": "只有管理员可以使用在线搜索",
+        "emptyKeyword": "请输入关键词",
+        "noSelection": "请至少选择一首歌曲"
+      }
+    },
     "sync": {
       "title": "百度网盘同步",
       "subtitle": "从百度网盘增量同步歌曲与歌词，删除走回收站更安全",
@@ -717,6 +769,9 @@
   },
   "menu": {
     "library": "媒体库",
+    "musicSearch": {
+      "name": "在线搜索"
+    },
     "librarySelector": {
       "allLibraries": "全部媒体库 (%{count})",
       "multipleLibraries": "已选 %{selected} 共 %{total} 个媒体库",
