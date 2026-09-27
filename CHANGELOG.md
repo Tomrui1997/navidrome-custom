@@ -65,5 +65,6 @@
 
 - `go vet ./tools/nd-helper/...` 0 问题、`gofmt -l` 无输出、`go test ./tools/nd-helper/...` 8/8 通过
 - 一键构建部署：`powershell -File e:\navidrome-deploy\90-build-deploy.ps1 -Target test`（含 SHA256 校验与回滚命令）
-- 测试环境实测：同步 1.209GB/4m32s（≈4.4MB/s）、增量跳过、范围排除、路径锁定、删除→回收站→恢复、权限校验
+- 测试环境实测：同步 1.209GB/4m32s（≈4.4MB/s）、增量跳过、范围排除、路径锁定、删除→回收站→恢复、**删除同步删网盘（网盘文件进 `/_deleted/`）**、权限校验
+- 日志治理实测：完整一轮同步当天日志 2170 行 / 256KB（未过滤时每轮约 500KB 且含元数据块），噪音（md5/直链/undefined）均为 0；旧 5.2MB 单文件已归档为 `legacy.log`
 - 生产部署：**等待用户通知后执行**
