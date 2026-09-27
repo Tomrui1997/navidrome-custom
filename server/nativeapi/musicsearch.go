@@ -289,14 +289,17 @@ func handleMusicLoginState(client *baidusync.Client) http.HandlerFunc {
 			writeMusicError(w, r.Context(), err)
 			return
 		}
-		var wrapper struct {
-			Data map[string]string `json:"data"`
+		// 注意：上游 /system/cookies **直接返回 {平台: cookie} 映射**，不带 code/msg/data 包装。
+		// 这里仅取「是否非空」，凭据内容既不回传也不写日志。
+		cookies := map[string]string{}
+		if err := json.Unmarshal(res, &cookies); err != nil {
+			writeMusicError(w, r.Context(), fmt.Errorf("登录态响应解析失败: %w", err))
+			return
 		}
-		_ = json.Unmarshal(res, &wrapper)
 		loggedIn := map[string]bool{}
 		cnt := 0
 		for _, s := range []string{"netease", "qq", "kugou", "kuwo", "migu", "bilibili"} {
-			ok := strings.TrimSpace(wrapper.Data[s]) != ""
+			ok := strings.TrimSpace(cookies[s]) != ""
 			loggedIn[s] = ok
 			if ok {
 				cnt++
