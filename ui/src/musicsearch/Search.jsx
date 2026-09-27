@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Checkbox,
@@ -6,11 +6,13 @@ import {
   CircularProgress,
   FormControl,
   FormControlLabel,
+  IconButton,
   InputLabel,
   LinearProgress,
   MenuItem,
   Paper,
   Select,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -18,10 +20,13 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 import { useNotify, useTranslate } from 'react-admin'
+import { MdPlayArrow, MdStop } from 'react-icons/md'
+import { REST_URL } from '../consts'
 import * as api from './api'
 import LoginDialog from './LoginDialog'
 
@@ -117,6 +122,9 @@ const Search = () => {
   const [downloadTypes, setDownloadTypes] = useState(['audio', 'lyric', 'cover'])
   const [task, setTask] = useState(null)
   const [loginOpen, setLoginOpen] = useState(false)
+  const [previewOn, setPreviewOn] = useState(false)
+  const [playingKey, setPlayingKey] = useState('')
+  const audioRef = useRef(null)
 
   // 加载服务可用性
   const loadHealth = useCallback(async () => {
@@ -130,6 +138,11 @@ const Search = () => {
   useEffect(() => {
     loadHealth()
   }, [loadHealth])
+
+  // 同步试听开关状态（开关值持久化在助手配置里）
+  useEffect(() => {
+    if (health) setPreviewOn(Boolean(health.preview))
+  }, [health])
 
   // 轮询下载进度（仅服务可用时）
   useEffect(() => {
@@ -249,6 +262,45 @@ const Search = () => {
   const running = Boolean(task && task.running)
   const canDownload = searchType === 'song'
 
+  // 试听：<audio> 无法携带 Authorization 头，改用 Navidrome 的 ?jwt= 查询参数认证（与 /api/events 同一机制）
+  const togglePreview = useCallback(
+    (it) => {
+      const audio = audioRef.current
+      if (!audio) return
+      const key = itemKey(it)
+      if (playingKey === key) {
+        audio.pause()
+        setPlayingKey('')
+        return
+      }
+      const token = window.localStorage.getItem('token') || ''
+      audio.src = `${REST_URL}/musicsearch/preview?id=${encodeURIComponent(
+        it.id,
+      )}&source=${encodeURIComponent(it.source || '')}&jwt=${encodeURIComponent(token)}`
+      audio.play().then(
+        () => setPlayingKey(key),
+        (e) => {
+          notify(
+            `试听失败：${(e && e.message) || '无法播放（可能无版权或无可用音源）'}`,
+            'error',
+          )
+          setPlayingKey('')
+        },
+      )
+    },
+    [playingKey, notify],
+  )
+
+  const handlePreviewToggle = async (checked) => {
+    try {
+      const r = await api.previewSetting(checked)
+      setPreviewOn(Boolean(r && r.preview))
+      notify(checked ? '已开启在线试听' : '已关闭在线试听', 'info')
+    } catch (e) {
+      notify(api.errMessage(e), 'error')
+    }
+  }
+
   const healthChip = useMemo(() => {
     if (!health) return <Chip size="small" label={translate('resources.musicsearch.health.unavailable')} />
     if (!health.enabled) {
@@ -273,6 +325,19 @@ const Search = () => {
       <div className={classes.header}>
         <Typography variant="h5">{translate('resources.musicsearch.title')}</Typography>
         {healthChip}
+        <Tooltip title="开启后可在结果列表直接试听（会占用服务器出口带宽，生产环境建议保持关闭）">
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={previewOn}
+                onChange={(e) => handlePreviewToggle(e.target.checked)}
+                disabled={!health?.reachable}
+              />
+            }
+            label="在线试听"
+          />
+        </Tooltip>
         <Button size="small" variant="outlined" onClick={() => setLoginOpen(true)}>
           {translate('resources.musicsearch.login.button')}
         </Button>
@@ -409,6 +474,7 @@ const Search = () => {
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.size')}</TableCell>
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.bitrate')}</TableCell>
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.source')}</TableCell>
+                  {previewOn && <TableCell className={classes.head}>试听</TableCell>}
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -429,6 +495,19 @@ const Search = () => {
                     <TableCell>{fmtSize(it.size)}</TableCell>
                     <TableCell>{it.bitrate ? `${it.bitrate} kbps` : '-'}</TableCell>
                     <TableCell>{it.source}</TableCell>
+                    {previewOn && (
+                      <TableCell padding="none">
+                        <Tooltip title={playingKey === itemKey(it) ? '停止' : '试听'}>
+                          <IconButton size="small" onClick={() => togglePreview(it)}>
+                            {playingKey === itemKey(it) ? (
+                              <MdStop fontSize="small" />
+                            ) : (
+                              <MdPlayArrow fontSize="small" />
+                            )}
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -458,6 +537,9 @@ const Search = () => {
           </div>
         </>
       )}
+
+      {/* 隐藏的播放器：试听用 */}
+      <audio ref={audioRef} style={{ display: 'none' }} onEnded={() => setPlayingKey('')} />
 
       <LoginDialog
         open={loginOpen}

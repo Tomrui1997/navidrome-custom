@@ -18,12 +18,13 @@ import { useNotify, useTranslate } from 'react-admin'
 import * as api from './api'
 
 // 支持扫码登录的平台（与后端白名单一致）
+// accountName 用于「已登录」徽章：QQ 与微信扫码都会写入同一个 qq 凭据，故徽章统一显示该账号体系名
 const LOGIN_OPTIONS = [
-  { id: 'qq', name: 'QQ音乐（QQ 扫码）' },
-  { id: 'qq_wx', name: 'QQ音乐（微信扫码）' },
-  { id: 'netease', name: '网易云音乐' },
-  { id: 'kugou', name: '酷狗音乐' },
-  { id: 'bilibili', name: 'Bilibili' },
+  { id: 'qq', name: 'QQ音乐（QQ 扫码）', accountName: 'QQ音乐' },
+  { id: 'qq_wx', name: 'QQ音乐（微信扫码）', accountName: 'QQ音乐' },
+  { id: 'netease', name: '网易云音乐', accountName: '网易云音乐' },
+  { id: 'kugou', name: '酷狗音乐', accountName: '酷狗音乐' },
+  { id: 'bilibili', name: 'Bilibili', accountName: 'Bilibili' },
 ]
 
 const POLL_INTERVAL_MS = 2000
@@ -185,7 +186,10 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
     }
   }
 
-  const loggedNames = LOGIN_OPTIONS.filter((o) => loggedIn[o.id]).map((o) => o.name)
+  // 同一账号体系去重（用 QQ 或微信扫码都写入 qq 凭据，徽章不应重复显示）
+  const loggedNames = [
+    ...new Set(LOGIN_OPTIONS.filter((o) => loggedIn[o.id]).map((o) => o.accountName)),
+  ]
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>

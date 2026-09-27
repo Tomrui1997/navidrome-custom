@@ -66,3 +66,11 @@ export const loginPoll = ({ source, key }) =>
 
 export const loginState = () =>
   httpClient(`${REST_URL}/musicsearch/login/state`).then((r) => r.json)
+
+// ------ 在线试听开关 ------ //
+
+export const previewSetting = (enabled) =>
+  httpClient(`${REST_URL}/musicsearch/preview/setting`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  }).then((r) => r.json)

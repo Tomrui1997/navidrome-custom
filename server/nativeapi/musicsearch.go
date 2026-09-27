@@ -55,6 +55,9 @@ func (api *Router) addMusicSearchRoute(r chi.Router) {
 		r.Get("/health", handleMusicSearchHealth(client))
 		r.Get("/search", handleMusicSearch(client))
 		r.Get("/lyric", handleMusicSearchLyric(client))
+		// 在线试听：音频流直接透传给 <audio>（受 enablePreview 开关控制，默认关闭以省出口带宽）
+		r.Get("/preview", handleMusicPreview(client))
+		r.Post("/preview/setting", handleMusicPreviewSetting(client))
 		r.Post("/download", handleMusicDownloadStart(client))
 		r.Get("/download/status", handleMusicDownloadStatus(client))
 		r.Post("/download/cancel", handleMusicDownloadCancel(client))
@@ -476,6 +479,107 @@ func handleMusicDownloadCancel(client *baidusync.Client) http.HandlerFunc {
 		}
 		log.Warn(r.Context(), "已请求取消在线下载")
 		writeJSON(w, http.StatusOK, map[string]any{"cancelled": true})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 在线试听
+// ---------------------------------------------------------------------------
+
+// handleMusicPreview 代理试听音频流。
+//
+// 说明：`<audio>` 标签无法携带 Authorization 头，因此本接口依赖 Navidrome 的 `?jwt=`
+// 查询参数认证（与 `/api/events` 同一机制）。
+// 另一处注意：这里**逐字节流式转发**（不做整体缓冲），并透传 Range 以便播放器 seek。
+func handleMusicPreview(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		if !cfg.EnablePreview {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "在线试听未启用（在搜索页顶部打开开关）"})
+			return
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+		if !musicIDRe.MatchString(id) || !musicSearchSources[source] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 或 source 不合法"})
+			return
+		}
+		base, err := musicAPIBase(*cfg)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		params := url.Values{}
+		params.Set("id", id)
+		params.Set("source", source)
+		endpoint := base + "/api/v1/music/stream?" + params.Encode()
+
+		// 试听是流式传输，给足超时
+		reqCtx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		// 透传 Range，使播放器可以拖动进度
+		if rng := r.Header.Get("Range"); rng != "" {
+			req.Header.Set("Range", rng)
+		}
+		resp, err := (&http.Client{}).Do(req)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+			writeJSON(w, http.StatusBadGateway, map[string]string{
+				"error": fmt.Sprintf("音源不可用（上游返回 %d，可能是版权限制或无可用音源）", resp.StatusCode)})
+			return
+		}
+		// 透传关键响应头（Content-Length 缺失时由 Go 自行分块）
+		for _, h := range []string{"Content-Type", "Content-Length", "Accept-Ranges", "Content-Range", "Cache-Control"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+		w.Header().Set("Content-Disposition", "inline")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+// handleMusicPreviewSetting 开关在线试听。
+//
+// 注意：回写的是**从助手读到的完整配置**（只改一个字段）—— 若只提交部分字段，
+// 助手侧会把缺失字段重置为默认值，造成同步配置被意外覆盖。
+func handleMusicPreviewSetting(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败: " + err.Error()})
+			return
+		}
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		cfg.EnablePreview = body.Enabled
+		saved, err := client.SetConfig(r.Context(), *cfg)
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		log.Info(r.Context(), "在线试听开关已更新", "enabled", saved.EnablePreview)
+		writeJSON(w, http.StatusOK, map[string]any{"preview": saved.EnablePreview})
 	}
 }
 
