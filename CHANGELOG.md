@@ -198,4 +198,47 @@
 - 其余自建功能（在线搜索/试听、歌曲删除等）本轮**未展开**，统一指向 [`docs/使用手册.md`](docs/使用手册.md)
 - 说明章节后仍保留上游 README 原文，便于对照上游
 
+### 11. 缺陷修复与生产上线（在线搜索 / 下载 / 试听）
+
+#### 11.1 修复：生产环境「在线试听」报 `Failed to load because no supported source was found`
+
+- **根因**：`ui/src/musicsearch/Search.jsx` 拼接试听地址时只用了 `REST_URL`（`/api`，**站根路径**），
+  漏了 `baseUrl()` 前缀。测试环境 `config.baseURL` 为空 → 恰好正确；
+  **生产** `BaseURL=/music` → 请求打到 `https://lxssc.com/api/musicsearch/preview`，
+  被 nginx 的 `location /api/` 路由到**博客后端**，返回 JSON（`{"code":401,"message":"未登录或登录已过期"}`）
+  而非音频 → `<audio>` 报「no supported source was found」
+- **修复**：用 `baseUrl()` 包装该地址（写法与既有的 `ui/src/eventStream.js` 保持一致），并补注释说明原因
+- **同类问题排查**：全仓检索自建模块中绕过 `httpClient` / `baseUrl` 的直连地址（`audio.src` / `fetch` /
+  `img src` / `href`）→ 仅此一处；`LoginDialog` 的 `href` 是上游登录页外链，无需处理
+
+#### 11.2 生产上线（2026-09-28 01:05 ~ 01:12）
+
+| 组件 | 上线前 | 上线后 |
+| --- | --- | --- |
+| Navidrome | `04ca948f`（仅含网盘同步 + 歌曲删除） | `3031c94c`（新增在线搜索 / 下载入库 / 试听 / 扫码登录） |
+| nd-helper | `729e0744`（旧，无下载动作） | `f3c37396`（含 download 系列动作） |
+| go-music-api | **未部署** | 新装；`127.0.0.1:18080`，`MemoryMax=200M` `CPUQuota=50%` `UMask=0077` |
+
+- 上线前已备份可回滚：`/opt/navidrome/navidrome.pre-onlinesearch.bak`（`04ca948f`）、
+  `/usr/local/bin/nd-helper.pre-onlinesearch.bak`（`729e0744`）、`baidusync.json.bak.<时间戳>`
+- **关键决策**：生产 `enablePreview` 由使用者在页面上开启（默认关闭）；试听会让音频流经服务器中转，
+  受出口带宽限制，如不需要可一键关闭（「在线音乐搜索」页顶部开关）
+
+### 验证方式（生产）
+
+- **试听链路（修复前 / 后对照）**：修复前的站根地址 → `http=401` + `application/json` + 博客后端响应体
+  （证实被 nginx 路由到了博客服务）；修复后的子路径地址（经公网 nginx 与回环各测一次）→
+  **`http=206` + `Content-Type: audio/mpeg` + `Content-Range: bytes 0-65535/3576668`**，读到 65536 字节真实音频
+- **鉴权**：不带 `jwt` 请求试听 → `401`；接入前 4 个接口未认证均 `401`（路由存在且鉴权生效，不再是 `404`）
+- **前端包**：线上 bundle 由 `index-DJLVQkmt.js` 变为 `index-BRWUxGXO.js`（确认新产物生效）
+- **go-music-api（生产）**：5/5 平台可搜（netease 9 / qq 5 / kugou 10 / kuwo 2 / migu 18）；
+  仅 `127.0.0.1:18080` 监听，经对外 IP 访问返回 `000`；nginx 未引用该端口；RSS 38~44MB / `MemoryCurrent` 15MB；
+  服务级 `resolv.conf`（`BindReadOnlyPaths`）生效，规避 Go 双栈只拿到 AAAA 的老问题
+- **原站回归**：博客 `/` 200、`/admin/login` 200、`/api/` 401；`/music/` 302（BaseURL 重定向正常）；`nginx -t` 通过
+- **验收安全做法**：使用**临时管理员用户**（随机口令、不落盘、用后即删）取 JWT 验证；
+  下载验证把 `downloadDir` 临时指向 `/tmp` 并即时还原 —— **音乐库无任何污染**（前后均为 430 个文件）
+- **资源**：可用内存 1386MB；navidrome 48.2MB、go-music-api 43.6MB、nd-helper 10.4MB（无 swap，均有限额）
+- **用户列表**：仅 `admin`（临时用户已删除）
+
+
 

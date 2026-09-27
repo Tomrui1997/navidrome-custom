@@ -27,6 +27,7 @@ import { makeStyles } from '@material-ui/core/styles'
 import { useNotify, useTranslate } from 'react-admin'
 import { MdPlayArrow, MdStop } from 'react-icons/md'
 import { REST_URL } from '../consts'
+import { baseUrl } from '../utils'
 import * as api from './api'
 import LoginDialog from './LoginDialog'
 
@@ -274,9 +275,16 @@ const Search = () => {
         return
       }
       const token = window.localStorage.getItem('token') || ''
-      audio.src = `${REST_URL}/musicsearch/preview?id=${encodeURIComponent(
-        it.id,
-      )}&source=${encodeURIComponent(it.source || '')}&jwt=${encodeURIComponent(token)}`
+      // 必须用 baseUrl() 前缀：生产环境通过 nginx 子路径 /music 反代（config.baseURL=/music），
+      // 若直接用 REST_URL（=/api）会请求到站根 /api/... → 被 nginx 路由到博客后端而拿到 404，
+      // 浏览器表现为「no supported source was found」。此处与 eventStream.js 的写法保持一致。
+      audio.src = baseUrl(
+        `${REST_URL}/musicsearch/preview?id=${encodeURIComponent(
+          it.id,
+        )}&source=${encodeURIComponent(
+          it.source || '',
+        )}&jwt=${encodeURIComponent(token)}`,
+      )
       audio.play().then(
         () => setPlayingKey(key),
         (e) => {
