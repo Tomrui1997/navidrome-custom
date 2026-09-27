@@ -166,12 +166,31 @@ var validMusicSources = map[string]bool{
 // 文件名中不允许出现的字符（路径分隔符、Windows 保留字符、控制字符）
 var unsafeNameRe = regexp.MustCompile(`[/\\:*?"<>|\x00-\x1f\x7f]`)
 
-// sanitizeName 清洗文件/目录名片段：剔除危险字符、折叠空白、去首尾点与空格、限长。
+// 不可见字符（零宽空格、方向标记、字节序标记、词连接符、蒙古文元音分隔符）。
+// 为什么必须删除：strings.Fields 依据 unicode.IsSpace 判定空白，而这些字符不属于空白，
+// 会被当作正文原样保留 → 目录名与标签里混入看不见的字符，用户搜「周杰伦」时匹配不到
+// 形如「周杰<U+200B>伦」的记录，同一艺人的歌甚至会被分到两个文件夹。
+var invisibleRe = regexp.MustCompile(`[\x{200b}\x{200e}\x{200f}\x{180e}\x{feff}\x{2060}]`)
+
+// 非 ASCII 空白（不换行空格、全角空格、Ogham 空格、各种窄空格、行/段分隔符）。
+// 为什么删除而不是转成普通空格：这类字符几乎只出现在脏数据里（常见于中文人名中间），
+// 统一删除才能与正常写法合并；若转成空格反而会凭空造出「周杰 伦」这种新变体。
+var unicodeSpaceRe = regexp.MustCompile("[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]")
+
+// normalizeField 归一化要「落盘成文件名 + 写进音频标签」的文本字段。
+// 目录名、文件名、标签三处必须取自同一次归一化，否则同一首歌会因上游返回的隐形字符
+// 而分裂成两个目录，或生成两条互相搜不到的记录。
+func normalizeField(s string) string {
+	s = invisibleRe.ReplaceAllString(s, "")
+	s = unicodeSpaceRe.ReplaceAllString(s, "")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// sanitizeName 清洗文件/目录名片段：归一化空白与隐形字符、剔除危险字符、去首尾点与空格、限长。
 // 目的：即便歌曲名含 "../" 或 "/" 也无法逃逸出目标目录。
 func sanitizeName(s string) string {
-	s = strings.TrimSpace(s)
+	s = normalizeField(s)
 	s = unsafeNameRe.ReplaceAllString(s, "_")
-	s = strings.Join(strings.Fields(s), " ")
 	s = strings.Trim(s, ". ")
 	if s == "" {
 		s = "unknown"
@@ -586,6 +605,12 @@ const (
 func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Config,
 	item DownloadItem, types []string, lg func(string, ...any),
 	coverMu *sync.Mutex, coverDone map[string]bool) dlResult {
+
+	// 0) 归一化三个文本字段。目录名、文件名、写入的标签必须都取自这份归一化结果，
+	// 否则上游返回的隐形空白会让同一艺人的歌分裂到不同目录，或写出的标签搜不到。
+	item.Name = normalizeField(item.Name)
+	item.Artist = normalizeField(item.Artist)
+	item.Album = normalizeField(item.Album)
 
 	// 1) 计算落点（先清洗命名，再做包含性校验）
 	artistDir := filepath.Join(cfg.DownloadDir, sanitizeName(item.Artist))

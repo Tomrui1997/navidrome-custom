@@ -37,6 +37,47 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
+// 隐形空白是「同一艺人被拆成两个目录 / 库内搜不到」的直接原因，逐种字符都要覆盖。
+func TestNormalizeFieldStripsInvisibleAndUnicodeSpaces(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"零宽空格被删除", "周杰\u200b伦", "周杰伦"},
+		{"字节序标记被删除", "\ufeff周杰伦", "周杰伦"},
+		{"方向标记被删除", "周杰\u200e伦", "周杰伦"},
+		{"不换行空格被删除（与正常写法合并）", "周杰\u00a0伦", "周杰伦"},
+		{"全角空格被删除（与正常写法合并）", "周杰\u3000伦", "周杰伦"},
+		{"窄空格被删除", "周杰\u2009伦", "周杰伦"},
+		{"普通连续空格折叠为单个", "周杰  伦", "周杰 伦"},
+		{"制表符折叠为空格", "a\tb", "a b"},
+		{"首尾空白被去掉", "  稻香  ", "稻香"},
+		{"空串保持空串", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := normalizeField(c.in); got != c.want {
+				t.Errorf("normalizeField(%q) = %q, 期望 %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// 落盘命名必须继承归一化结果，否则隐形字符仍会进入目录名与文件名。
+func TestSanitizeNameRemovesInvisibleChars(t *testing.T) {
+	if got := sanitizeName("周杰\u200b伦"); got != "周杰伦" {
+		t.Errorf("sanitizeName 未清除零宽空格: %q", got)
+	}
+	if got := sanitizeName("周杰\u3000伦 - 稻香"); got != "周杰伦 - 稻香" {
+		t.Errorf("sanitizeName 未清除全角空格: %q", got)
+	}
+	// 普通空格是合法命名，必须保留（不能把「周杰 伦」误改成「周杰伦」）
+	if got := sanitizeName("周杰 伦"); got != "周杰 伦" {
+		t.Errorf("sanitizeName 误删了合法空格: %q", got)
+	}
+}
+
 // 超长名称必须按 UTF-8 边界安全截断（中文名按字节截断会产生半个字符）。
 func TestSanitizeNameTruncatesSafely(t *testing.T) {
 	long := strings.Repeat("歌", 100) // 300 字节
