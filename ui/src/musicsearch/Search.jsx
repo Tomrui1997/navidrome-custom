@@ -67,14 +67,13 @@ const useStyles = makeStyles((theme) => ({
   },
   table: { marginTop: theme.spacing(2) },
   head: { fontWeight: 600 },
-  progressBox: { marginTop: theme.spacing(2) },
-  // 结果列表可能很长（跨平台去重后常有 20~40 条），操作栏必须吸附在视口底部，
-  // 否则每次批量下载都要滚到底才能点到「下载选中」（真实体验问题）。
-  // 必须给不透明背景 + 上边框，否则滚动内容会透过操作栏。
+  // 结果列表可能很长（跨平台去重后常有 20~40 条），操作栏与**下载进度**都必须吸附在视口底部：
+  // 进度原先渲染在表格**上方**，用户滚到列表里就看不见了（真实反馈：开始下载后看不到进度）。
+  // 必须给不透明背景，否则滚动内容会透过操作栏。
   footer: {
     display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(2),
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
     marginTop: theme.spacing(2),
     position: 'sticky',
     bottom: 0,
@@ -84,6 +83,13 @@ const useStyles = makeStyles((theme) => ({
     borderTop: `1px solid ${theme.palette.divider}`,
     borderBottom: `1px solid ${theme.palette.divider}`,
   },
+  footerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(2),
+    flexWrap: 'wrap',
+  },
+  footerProgress: { flex: '1 1 320px', minWidth: 240 },
   errList: {
     margin: 0,
     paddingLeft: theme.spacing(2),
@@ -268,6 +274,12 @@ const Search = () => {
   // 行内单曲下载：无需勾选、也无需滚到底，直接下载当前这一首（下载内容沿用上方勾选项）。
   const handleRowDownload = (it) => submitDownload([it])
 
+  // 重试上一轮失败的条目（"未完成的下载"）：助手已保留原始条目，直接重新提交。
+  const handleRetryFailed = () => {
+    if (failedItems.length === 0) return
+    submitDownload(failedItems)
+  }
+
   const handleCancel = async () => {
     try {
       await api.cancelDownload()
@@ -281,6 +293,12 @@ const Search = () => {
   const allSelected = results.length > 0 && selectedCount === results.length
   const running = Boolean(task && task.running)
   const canDownload = searchType === 'song'
+  // 未完成数量：运行中 = 总任务数 - 已处理；结束后 = 失败数（失败即未完成）
+  const remaining =
+    running && task && task.total > 0 ? Math.max(0, task.total - (task.processed || 0)) : 0
+  const lastTask = !running && task && task.total > 0 ? task : null
+  // 助手快照保留了失败项**原始条目**，可直接作为新任务重试
+  const failedItems = !running && task && Array.isArray(task.failedItems) ? task.failedItems : []
 
   // 试听：<audio> 无法携带 Authorization 头，改用 Navidrome 的 ?jwt= 查询参数认证（与 /api/events 同一机制）
   const togglePreview = useCallback(
@@ -443,35 +461,8 @@ const Search = () => {
         ))}
       </div>
 
-      {running && (
-        <div className={classes.progressBox}>
-          <Typography variant="body2">
-            {translate('resources.musicsearch.task.running')}　
-            {translate('resources.musicsearch.task.progress', {
-              done: task.processed || 0,
-              total: task.total || 0,
-            })}
-            {task.skipped ? `　跳过 ${task.skipped}` : ''}
-            {task.failed ? `　失败 ${task.failed}` : ''}
-          </Typography>
-          <LinearProgress
-            variant={task.total > 0 ? 'determinate' : 'indeterminate'}
-            value={task.total > 0 ? Math.round(((task.processed || 0) / task.total) * 100) : 0}
-          />
-          {task.current && (
-            <Typography variant="caption" color="textSecondary">
-              {translate('resources.musicsearch.task.current')}：{task.current}
-            </Typography>
-          )}
-        </div>
-      )}
+      {/* 下载进度与操作栏：统一放在底部吸底栏里（原先渲染在这里的进度块滚动即不可见） */}
 
-      {!running && task && task.total > 0 && (
-        <Typography variant="body2" style={{ marginTop: 12 }}>
-          上次下载：完成 {task.done || 0}　跳过 {task.skipped || 0}　失败 {task.failed || 0}
-          {task.errMsg ? `（${task.errMsg}）` : ''}
-        </Typography>
-      )}
       {!running && task && task.errors && task.errors.length > 0 && (
         <ul className={classes.errList}>
           {task.errors.slice(0, 8).map((e) => (
@@ -562,24 +553,82 @@ const Search = () => {
           </TableContainer>
 
           <div className={classes.footer}>
-            <Typography variant="body2">已选 {selectedCount} 首</Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleDownload}
-              disabled={!canDownload || running || selectedCount === 0}
-            >
-              {translate('resources.musicsearch.actions.download')}
-            </Button>
-            {running && (
-              <Button variant="outlined" color="secondary" onClick={handleCancel}>
-                {translate('resources.musicsearch.actions.cancel')}
-              </Button>
-            )}
-            {!canDownload && (
-              <Typography variant="caption" color="textSecondary">
-                专辑/歌单结果暂不支持直接下载，请切换到「歌曲」类型
-              </Typography>
+            {running ? (
+              <>
+                {/* 运行中：进度、计数（含「剩余」）与当前文件全部放在吸底栏，滚到哪都看得到 */}
+                <div className={classes.footerProgress}>
+                  <Typography variant="body2">
+                    {translate('resources.musicsearch.task.runningSummary', {
+                      processed: task.processed || 0,
+                      total: task.total || 0,
+                      done: task.done || 0,
+                      skipped: task.skipped || 0,
+                      failed: task.failed || 0,
+                      remaining,
+                    })}
+                    {task.elapsed ? `｜已用 ${task.elapsed}s` : ''}
+                  </Typography>
+                  <LinearProgress
+                    variant={task.total > 0 ? 'determinate' : 'indeterminate'}
+                    value={
+                      task.total > 0 ? Math.round(((task.processed || 0) / task.total) * 100) : 0
+                    }
+                  />
+                  {task.current && (
+                    <Typography variant="caption" color="textSecondary" noWrap display="block">
+                      {translate('resources.musicsearch.task.current')}：{task.current}
+                    </Typography>
+                  )}
+                </div>
+                <Button variant="outlined" color="secondary" onClick={handleCancel}>
+                  {translate('resources.musicsearch.actions.cancel')}
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className={classes.footerRow}>
+                  <Typography variant="body2">已选 {selectedCount} 首</Typography>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={handleDownload}
+                    disabled={!canDownload || selectedCount === 0}
+                  >
+                    {translate('resources.musicsearch.actions.download')}
+                  </Button>
+                  {lastTask && (
+                    <Typography variant="body2" color="textSecondary">
+                      {translate('resources.musicsearch.task.lastRunSummary', {
+                        done: lastTask.done || 0,
+                        skipped: lastTask.skipped || 0,
+                        failed: lastTask.failed || 0,
+                      })}
+                      {lastTask.errMsg ? `（${lastTask.errMsg}）` : ''}
+                    </Typography>
+                  )}
+                  {failedItems.length > 0 && (
+                    <Tooltip
+                      title={
+                        <span style={{ whiteSpace: 'pre-line' }}>
+                          {(lastTask.errors || []).slice(0, 8).join('\n')}
+                        </span>
+                      }
+                    >
+                      {/* 失败即「未完成」：给出条数并提供一键重试 */}
+                      <Button variant="outlined" color="primary" onClick={handleRetryFailed}>
+                        {translate('resources.musicsearch.task.retryFailed', {
+                          count: failedItems.length,
+                        })}
+                      </Button>
+                    </Tooltip>
+                  )}
+                  {!canDownload && (
+                    <Typography variant="caption" color="textSecondary">
+                      专辑/歌单结果暂不支持直接下载，请切换到「歌曲」类型
+                    </Typography>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </>

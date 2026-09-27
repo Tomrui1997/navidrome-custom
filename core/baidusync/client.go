@@ -183,6 +183,9 @@ type Config struct {
 	DownloadOverwrite bool `json:"downloadOverwrite"`
 	// DownloadTypes 下载内容类型：audio / lyric / cover。
 	DownloadTypes []string `json:"downloadTypes"`
+	// TagMetadata 是否用 ffmpeg 把歌手/歌名/专辑写入音频标签（默认 true）。
+	// 必须在本层显式声明，否则读回来的配置会缺该字段。
+	TagMetadata bool `json:"tagMetadata"`
 }
 
 // DownloadItem 一首待下载歌曲（前端选中后提交给助手）。
@@ -211,6 +214,10 @@ type DownloadTask struct {
 	ErrMsg    string   `json:"errMsg"`
 	Errors    []string `json:"errors"`
 	StartedAt string   `json:"startedAt"`
+	// FailedItems 失败项的**原始条目**（id/source/name…）。
+	// 前端据此显示「未完成数量」并提供「重试失败的 N 首」。
+	// 注意：这一层必须显式声明该字段，否则助手返回的 failedItems 会在反序列化时被静默丢弃。
+	FailedItems []DownloadItem `json:"failedItems"`
 }
 
 // Login 百度登录态。

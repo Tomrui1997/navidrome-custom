@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -52,6 +53,10 @@ type DownloadItem struct {
 	CoverURL string `json:"coverUrl"`
 }
 
+// maxFailedItems 快照中最多回传多少条失败项（供前端「重试失败的 N 首」）。
+// 单次任务上限为 200 首（maxDownloadItems），此上限足以覆盖全部失败项。
+const maxFailedItems = 200
+
 // DownloadTask 一次下载任务（同一时刻只允许一个）。
 type DownloadTask struct {
 	mu        sync.Mutex
@@ -68,6 +73,9 @@ type DownloadTask struct {
 	errMsg    string
 	logPath   string
 	errs      []string // 失败明细（最多保留 20 条，供页面提示）
+	// failedItems 失败项的**原始条目**（id/source/name/artist…）。
+	// 只记文本的话页面既看不出「还剩多少首没下完」，也无法一键重试（真实反馈）。
+	failedItems []DownloadItem
 }
 
 func (t *DownloadTask) setTotal(n int) {
@@ -94,11 +102,15 @@ func (t *DownloadTask) incSkipped() {
 	t.mu.Unlock()
 }
 
-func (t *DownloadTask) addError(msg string) {
+// addFailure 记录一个失败项：文本明细给页面展示，原始条目留给前端重试。
+func (t *DownloadTask) addFailure(item DownloadItem, msg string) {
 	t.mu.Lock()
 	t.failed++
 	if len(t.errs) < 20 {
 		t.errs = append(t.errs, msg)
+	}
+	if len(t.failedItems) < maxFailedItems {
+		t.failedItems = append(t.failedItems, item)
 	}
 	t.mu.Unlock()
 }
@@ -130,6 +142,8 @@ func (t *DownloadTask) snapshot() map[string]any {
 		"elapsed":   elapsed,
 		"errMsg":    t.errMsg,
 		"errors":    t.errs,
+		// 失败项原始条目：前端据此显示「未完成数量」并提供一键重试
+		"failedItems": t.failedItems,
 	}
 	if !t.running && !t.finished.IsZero() {
 		res["finishedAt"] = t.finished
@@ -226,6 +240,170 @@ func containsTypes(types []string, want string) bool {
 	return false
 }
 
+// detectAudioFormat 通过文件头魔数嗅探**真实**音频容器。
+//
+// 为什么需要：平台声明的 ext 并不可信 —— 实测咪咕标称 SQ(FLAC) 却返回了 MP3 字节，
+// 文件被命名为 .flac 后 Navidrome 的解析器选错而失败，元数据全丢：
+// 标题退化成文件名、歌手/专辑变 [Unknown Artist]/[Unknown Album]，最终「按歌手搜不到」。
+func detectAudioFormat(head []byte) string {
+	if len(head) < 4 {
+		return ""
+	}
+	switch {
+	case string(head[0:3]) == "ID3":
+		return "mp3"
+	case head[0] == 0xFF && head[1]&0xE0 == 0xE0:
+		// 同步字均为 0xFFE；再靠 layer 位区分：ADTS AAC 的 layer 位为 00，MP3 为 01/10/11
+		if head[1]&0x06 == 0 {
+			return "aac"
+		}
+		return "mp3"
+	case string(head[0:4]) == "fLaC":
+		return "flac"
+	case string(head[0:4]) == "OggS":
+		return "ogg"
+	case string(head[0:4]) == "RIFF" && len(head) >= 12 && string(head[8:12]) == "WAVE":
+		return "wav"
+	case len(head) >= 12 && string(head[4:8]) == "ftyp":
+		return "m4a"
+	case string(head[0:4]) == "MAC ":
+		return "ape"
+	case head[0] == 0x30 && head[1] == 0x26 && head[2] == 0xB2 && head[3] == 0x75:
+		return "wma" // ASF 头
+	}
+	return ""
+}
+
+// sniffAudioExt 读取文件头返回真实扩展名（含点号）；识别不出或不在白名单时返回 ""。
+func sniffAudioExt(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close() //nolint:errcheck
+	head := make([]byte, 16)
+	n, _ := io.ReadFull(f, head)
+	if n < 4 {
+		return ""
+	}
+	return normalizeExt(detectAudioFormat(head[:n]))
+}
+
+// fixAudioExt 按实际内容纠正扩展名（与声明不符时改名），返回纠正后的路径与扩展名。
+// 改名失败时原样返回，不阻断下载。
+func fixAudioExt(path, curExt string, lg func(string, ...any)) (string, string) {
+	real := sniffAudioExt(path)
+	if real == "" || real == curExt {
+		return path, curExt
+	}
+	// Ogg 容器可能是 Opus：保留原有的 .opus 命名，不降级成 .ogg
+	if real == ".ogg" && curExt == ".opus" {
+		return path, curExt
+	}
+	newPath := strings.TrimSuffix(path, curExt) + real
+	if _, err := os.Stat(newPath); err == nil {
+		// 正确命名的同名文件已存在 → 删掉这个命名错误的副本，避免库里出现两份
+		if rmErr := os.Remove(path); rmErr == nil {
+			lg("实际格式为 %s，已删除命名错误的重复文件: %s", real, filepath.Base(path))
+		}
+		return newPath, real
+	}
+	if err := os.Rename(path, newPath); err != nil {
+		lg("扩展名纠正失败（保留原名）: %v", err)
+		return path, curExt
+	}
+	lg("扩展名已按实际内容纠正: %s -> %s", filepath.Base(path), filepath.Base(newPath))
+	return newPath, real
+}
+
+// ffmpegBin / ffprobeBin 定位媒体工具（优先 PATH，回退 /usr/local/bin）。
+func ffmpegBin() string  { return lookBin("ffmpeg") }
+func ffprobeBin() string { return lookBin("ffprobe") }
+
+func lookBin(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	fallback := filepath.Join("/usr/local/bin", name)
+	if st, err := os.Stat(fallback); err == nil && !st.IsDir() {
+		return fallback
+	}
+	return ""
+}
+
+// audioHasTags 判断文件是否已带可用的 title+artist 标签（ffprobe）。
+// 判断不了时返回 false：宁可多写一次标签（幂等），也不要漏写。
+func audioHasTags(ctx context.Context, path string) bool {
+	probe := ffprobeBin()
+	if probe == "" {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, probe, "-v", "quiet",
+		"-show_entries", "format_tags", "-of", "json", path).Output()
+	if err != nil {
+		return false
+	}
+	var res struct {
+		Format struct {
+			Tags map[string]string `json:"tags"`
+		} `json:"format"`
+	}
+	if json.Unmarshal(out, &res) != nil {
+		return false
+	}
+	tags := map[string]string{}
+	for k, v := range res.Format.Tags {
+		tags[strings.ToLower(k)] = v
+	}
+	return strings.TrimSpace(tags["title"]) != "" && strings.TrimSpace(tags["artist"]) != ""
+}
+
+// tagAudioFile 用 ffmpeg 把歌手/歌名/专辑写入音频标签（best-effort）。
+//
+// 为什么需要：平台返回的音频常常没有任何 ID3/Vorbis 标签，Navidrome 只能拿到标题（文件名），
+// 歌手/专辑全部缺失 → 按歌手/专辑浏览与搜索都找不到。写入后即可正常检索。
+// 实现要点：先写临时文件再 rename，失败时原文件完好。
+func tagAudioFile(ctx context.Context, path string, item DownloadItem, lg func(string, ...any)) error {
+	bin := ffmpegBin()
+	if bin == "" {
+		return errors.New("未找到 ffmpeg")
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	tmp := path + ".tagtmp" + ext
+	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", path,
+		"-c", "copy", "-map", "0:a:0",
+		"-metadata", "title=" + item.Name,
+		"-metadata", "artist=" + item.Artist,
+	}
+	if strings.TrimSpace(item.Album) != "" {
+		args = append(args, "-metadata", "album="+item.Album)
+	}
+	if ext == ".mp3" {
+		// ID3v2.3 兼容性最好（部分老播放器/车机不认 2.4）
+		args = append(args, "-id3v2_version", "3")
+	}
+	args = append(args, tmp)
+
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(cctx, bin, args...).CombinedOutput(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("ffmpeg 失败: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if st, err := os.Stat(tmp); err != nil || st.Size() == 0 {
+		_ = os.Remove(tmp)
+		return errors.New("ffmpeg 输出为空，保留原文件")
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("替换文件失败: %w", err)
+	}
+	lg("已写入元数据标签: %s", filepath.Base(path))
+	return nil
+}
+
 // newDownloadClient 下载专用 HTTP 客户端：分阶段超时，避免大文件下载被整体超时中断。
 func newDownloadClient() *http.Client {
 	return &http.Client{
@@ -275,11 +453,12 @@ func (s *Server) actionDownloadStart(items []DownloadItem, types []string) (any,
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task := &DownloadTask{
-		cancel:    cancel,
-		running:   true,
-		types:     types,
-		total:     len(items),
-		startedAt: time.Now(),
+		cancel:      cancel,
+		running:     true,
+		types:       types,
+		total:       len(items),
+		startedAt:   time.Now(),
+		failedItems: make([]DownloadItem, 0, len(items)),
 	}
 	s.mu.Lock()
 	s.downloadTask = task
@@ -366,7 +545,7 @@ func (s *Server) runDownload(ctx context.Context, task *DownloadTask, cfg Config
 			case dlOK:
 				task.incDone()
 			case dlFailed:
-				task.addError(item.Artist + " - " + item.Name)
+				task.addFailure(item, item.Artist+" - "+item.Name)
 			}
 		}(it)
 	}
@@ -428,6 +607,7 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 	}
 
 	// 2) 音频（增量：已存在且非空且未开覆盖 → 跳过）
+	downloaded := false
 	if containsTypes(types, "audio") {
 		if st, statErr := os.Stat(audioPath); statErr == nil && st.Size() > 0 && !cfg.DownloadOverwrite {
 			lg("已存在，跳过: %s", audioPath)
@@ -437,7 +617,23 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 				lg("音频下载失败: %s - %s (%v)", item.Artist, item.Name, err)
 				return dlFailed
 			}
+			downloaded = true
 			lg("音频完成: %s", audioPath)
+		}
+	}
+
+	// 2.1) 校正扩展名（平台声明的 ext 可能与实际内容不符）+ 补写元数据标签。
+	// 不做这两步的后果（真实缺陷）：文件被错误命名后 Navidrome 解析失败，
+	// 标题退化成文件名、歌手/专辑变 [Unknown Artist]/[Unknown Album] → 按歌手搜不到。
+	if containsTypes(types, "audio") {
+		if st, statErr := os.Stat(audioPath); statErr == nil && st.Size() > 0 {
+			audioPath, ext = fixAudioExt(audioPath, ext, lg)
+			// 刚下载的必写；已存在的仅在缺少标签时补写（避免每次重下都重写文件）
+			if cfg.TagMetadata && (downloaded || !audioHasTags(ctx, audioPath)) {
+				if err := tagAudioFile(ctx, audioPath, item, lg); err != nil {
+					lg("元数据写入跳过: %s（%v）", filepath.Base(audioPath), err)
+				}
+			}
 		}
 	}
 

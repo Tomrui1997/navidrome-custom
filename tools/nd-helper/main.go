@@ -94,6 +94,10 @@ type Config struct {
 	DownloadOverwrite bool `json:"downloadOverwrite"`
 	// DownloadTypes 下载内容类型：audio / lyric / cover。
 	DownloadTypes []string `json:"downloadTypes"`
+	// TagMetadata 是否用 ffmpeg 把歌手/歌名/专辑写入音频标签。
+	// 默认开启：很多平台返回的音频没有任何标签，Navidrome 只能拿到标题（文件名），
+	// 歌手/专辑全缺 → 按歌手/专辑浏览与搜索都找不到。
+	TagMetadata bool `json:"tagMetadata"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -133,6 +137,7 @@ func DefaultConfig() Config {
 		DownloadConcurrency: 2,
 		DownloadOverwrite:   false,
 		DownloadTypes:       []string{"audio", "lyric", "cover"},
+		TagMetadata:         true,
 	}
 }
 

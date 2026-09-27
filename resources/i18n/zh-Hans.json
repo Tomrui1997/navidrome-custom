@@ -40,7 +40,10 @@
         "current": "当前文件",
         "skipped": "跳过",
         "failed": "失败",
-        "progress": "%{done}/%{total}"
+        "progress": "%{done}/%{total}",
+        "runningSummary": "下载中：已处理 %{processed}/%{total}｜完成 %{done}｜跳过 %{skipped}｜失败 %{failed}｜剩余 %{remaining}",
+        "lastRunSummary": "上次下载：完成 %{done}｜跳过 %{skipped}｜失败 %{failed}",
+        "retryFailed": "重试失败的 %{count} 首"
       },
       "notifications": {
         "searched": "找到 %{count} 条结果",

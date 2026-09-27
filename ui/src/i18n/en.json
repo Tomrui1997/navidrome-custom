@@ -40,7 +40,10 @@
         "current": "Current",
         "skipped": "Skipped",
         "failed": "Failed",
-        "progress": "%{done}/%{total}"
+        "progress": "%{done}/%{total}",
+        "runningSummary": "Downloading: %{processed}/%{total} | done %{done} | skipped %{skipped} | failed %{failed} | remaining %{remaining}",
+        "lastRunSummary": "Last download: %{done} done | %{skipped} skipped | %{failed} failed",
+        "retryFailed": "Retry %{count} failed"
       },
       "notifications": {
         "searched": "Found %{count} results",

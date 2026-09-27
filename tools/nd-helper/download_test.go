@@ -212,3 +212,128 @@ func TestValidateConfigMusicApiRules(t *testing.T) {
 		t.Errorf("非法类型应回退为 audio，实际 %v", c.DownloadTypes)
 	}
 }
+
+// 失败项必须保留**原始条目**：只记文本的话，页面既看不出「还剩多少首没下完」，
+// 也无法一键重试（真实用户反馈驱动）。
+func TestAddFailureKeepsOriginalItems(t *testing.T) {
+	task := &DownloadTask{failedItems: make([]DownloadItem, 0, 4)}
+	item := DownloadItem{ID: "abc123", Source: "kuwo", Name: "晴天", Artist: "周杰伦", Duration: 269}
+	task.addFailure(item, item.Artist+" - "+item.Name)
+
+	snap := task.snapshot()
+	if snap["failed"] != 1 {
+		t.Errorf("failed 计数应为 1，实际 %v", snap["failed"])
+	}
+	items, ok := snap["failedItems"].([]DownloadItem)
+	if !ok {
+		t.Fatalf("failedItems 类型异常: %#v", snap["failedItems"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("failedItems 应保留 1 条原始条目，实际 %d", len(items))
+	}
+	if items[0].ID != "abc123" || items[0].Source != "kuwo" || items[0].Name != "晴天" {
+		t.Errorf("原始条目内容被破坏: %#v", items[0])
+	}
+	if errs, _ := snap["errors"].([]string); len(errs) != 1 {
+		t.Errorf("errors 文本明细应为 1 条，实际 %v", snap["errors"])
+	}
+}
+
+// failedItems 必须有上限保护，但 failed 计数不能被上限影响（计数必须真实）。
+func TestAddFailureCapsItemsButKeepsCount(t *testing.T) {
+	task := &DownloadTask{failedItems: make([]DownloadItem, 0, maxFailedItems)}
+	over := maxFailedItems + 10
+	for i := 0; i < over; i++ {
+		task.addFailure(DownloadItem{ID: "same", Source: "kuwo"}, "失败")
+	}
+	if got := len(task.failedItems); got != maxFailedItems {
+		t.Errorf("failedItems 应被限制为 %d，实际 %d", maxFailedItems, got)
+	}
+	if task.failed != over {
+		t.Errorf("failed 计数应继续累加为 %d，实际 %d", over, task.failed)
+	}
+	if snap := task.snapshot(); snap["failed"] != over {
+		t.Errorf("快照里的 failed 也应为 %d，实际 %v", over, snap["failed"])
+	}
+}
+
+// 内容嗅探必须准确识别真实容器。
+// 背景：平台会「标称 FLAC 实际返回 MP3」，按平台声明命名会让 Navidrome 解析失败 → 元数据全丢。
+func TestDetectAudioFormat(t *testing.T) {
+	head := func(b ...byte) []byte { return b }
+	cases := []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		{"ID3 开头的 mp3", head('I', 'D', '3', 0x03, 0x00), "mp3"},
+		{"MPEG 帧同步（layer III）", head(0xFF, 0xFB, 0x90, 0x00), "mp3"},
+		{"FLAC", head('f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22), "flac"},
+		{"Ogg", head('O', 'g', 'g', 'S', 0x00, 0x02), "ogg"},
+		{"WAV/RIFF", head('R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E'), "wav"},
+		{"M4A（ftyp）", head(0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'M', '4', 'A', ' '), "m4a"},
+		{"APE", head('M', 'A', 'C', ' '), "ape"},
+		{"ASF/WMA", head(0x30, 0x26, 0xB2, 0x75), "wma"},
+		{"ADTS AAC（layer 位为 00）", head(0xFF, 0xF1, 0x50, 0x80), "aac"},
+		{"无法识别", head(0x00, 0x01, 0x02, 0x03), ""},
+		{"太短", head(0xFF, 0xFB), ""},
+	}
+	for _, c := range cases {
+		if got := detectAudioFormat(c.in); got != c.want {
+			t.Errorf("%s: detectAudioFormat=%q，期望 %q", c.name, got, c.want)
+		}
+	}
+}
+
+// 扩展名纠正：按实际内容改名，且不把 .opus 降级成 .ogg。
+func TestFixAudioExtRenamesMislabeledFile(t *testing.T) {
+	dir := t.TempDir()
+	lg := func(string, ...any) {}
+
+	// 内容其实是 MP3，却存成了 .flac
+	mislabeled := filepath.Join(dir, "周传雄 - 侧脸.flac")
+	if err := os.WriteFile(mislabeled, []byte("ID3\x03\x00\x00\x00rest-of-mp3-bytes"), 0o644); err != nil {
+		t.Fatalf("准备文件失败: %v", err)
+	}
+	got, gotExt := fixAudioExt(mislabeled, ".flac", lg)
+	want := filepath.Join(dir, "周传雄 - 侧脸.mp3")
+	if got != want || gotExt != ".mp3" {
+		t.Fatalf("纠正结果不符: path=%q ext=%q（期望 %q/.mp3）", got, gotExt, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("纠正后的文件不存在: %v", err)
+	}
+	if _, err := os.Stat(mislabeled); !os.IsNotExist(err) {
+		t.Error("旧的错误命名文件应已被移除")
+	}
+
+	// 内容与扩展名一致 → 不动
+	ok := filepath.Join(dir, "ok.flac")
+	if err := os.WriteFile(ok, []byte("fLaC\x00\x00\x00\x22rest"), 0o644); err != nil {
+		t.Fatalf("准备文件失败: %v", err)
+	}
+	if p, e := fixAudioExt(ok, ".flac", lg); p != ok || e != ".flac" {
+		t.Errorf("一致时不应改名: path=%q ext=%q", p, e)
+	}
+
+	// Ogg 容器保留 .opus 命名
+	opus := filepath.Join(dir, "song.opus")
+	if err := os.WriteFile(opus, []byte("OggS\x00\x02rest"), 0o644); err != nil {
+		t.Fatalf("准备文件失败: %v", err)
+	}
+	if p, e := fixAudioExt(opus, ".opus", lg); p != opus || e != ".opus" {
+		t.Errorf(".opus 不应被降级为 .ogg: path=%q ext=%q", p, e)
+	}
+
+	// 目标文件已存在 → 删掉错误命名的副本
+	dupFlac := filepath.Join(dir, "dup.flac")
+	dupMp3 := filepath.Join(dir, "dup.mp3")
+	_ = os.WriteFile(dupFlac, []byte("ID3\x03\x00\x00\x00wrong"), 0o644)
+	_ = os.WriteFile(dupMp3, []byte("ID3\x03\x00\x00\x00right"), 0o644)
+	if p, e := fixAudioExt(dupFlac, ".flac", lg); p != dupMp3 || e != ".mp3" {
+		t.Errorf("重复时应保留正确命名的文件: path=%q ext=%q", p, e)
+	}
+	if b, err := os.ReadFile(dupMp3); err != nil || !strings.Contains(string(b), "right") {
+		t.Error("正确命名的文件内容被破坏")
+	}
+}

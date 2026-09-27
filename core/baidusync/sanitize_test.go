@@ -81,3 +81,41 @@ func TestSanitizeLoginPayloadKeepsQRFields(t *testing.T) {
 		t.Error("登录 key 应保留（轮询需要）")
 	}
 }
+
+// 中间层必须原样透传 failedItems。
+// 该字段是在助手侧新加的，本层若漏声明会被 encoding/json **静默丢弃**，
+// 导致前端既看不到「未完成数量」也无法一键重试（真实踩过的坑，务必防回归）。
+func TestDownloadTaskKeepsFailedItems(t *testing.T) {
+	raw := []byte(`{
+		"running": false, "total": 3, "done": 2, "skipped": 0, "failed": 1,
+		"processed": 2, "elapsed": 12, "errors": ["周杰伦 - 晴天"],
+		"failedItems": [{"id":"abc","source":"kuwo","name":"晴天","artist":"周杰伦","album":"叶惠美","duration":269}]
+	}`)
+
+	var st DownloadTask
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatalf("反序列化失败: %v", err)
+	}
+	if st.Failed != 1 || st.Processed != 2 || st.Total != 3 {
+		t.Errorf("基础字段解析异常: failed=%d processed=%d total=%d", st.Failed, st.Processed, st.Total)
+	}
+	if len(st.FailedItems) != 1 {
+		t.Fatalf("failedItems 被中间层丢弃了（必须在 DownloadTask 上声明该字段）: %d 条", len(st.FailedItems))
+	}
+	it := st.FailedItems[0]
+	if it.ID != "abc" || it.Source != "kuwo" || it.Name != "晴天" || it.Artist != "周杰伦" || it.Duration != 269 {
+		t.Errorf("失败项内容不完整: %#v", it)
+	}
+
+	// 再序列化回去 —— 前端拿到的就是这份 JSON，字段必须还在
+	out, err := json.Marshal(st)
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if !strings.Contains(string(out), `"failedItems"`) {
+		t.Errorf("序列化结果缺少 failedItems: %s", out)
+	}
+	if !strings.Contains(string(out), `"coverUrl"`) {
+		t.Errorf("DownloadItem 字段名应与助手一致（coverUrl）: %s", out)
+	}
+}
