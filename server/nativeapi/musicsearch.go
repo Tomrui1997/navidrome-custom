@@ -1,6 +1,7 @@
 package nativeapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,11 @@ var musicSearchSources = map[string]bool{
 	"bilibili": true, "soda": true,
 }
 
+// musicLoginSources 支持扫码登录的平台（与 go-music-api 的 qr_login/sources 一致）。
+var musicLoginSources = map[string]bool{
+	"netease": true, "qq": true, "qq_wx": true, "kugou": true, "bilibili": true,
+}
+
 // musicIDRe 歌曲 id 白名单：各平台 id 可能含数字、字母、点、横线、下划线，咪咕还有竖线。
 var musicIDRe = regexp.MustCompile(`^[A-Za-z0-9_.\-|]{1,128}$`)
 
@@ -52,6 +58,11 @@ func (api *Router) addMusicSearchRoute(r chi.Router) {
 		r.Post("/download", handleMusicDownloadStart(client))
 		r.Get("/download/status", handleMusicDownloadStatus(client))
 		r.Post("/download/cancel", handleMusicDownloadCancel(client))
+		// 账号登录（扫码）：登录后可解锁更高音质（上游会按音质从高到低自动尝试）
+		r.Get("/login/sources", handleMusicLoginSources(client))
+		r.Post("/login/qr", handleMusicLoginCreate(client))
+		r.Get("/login/qr/status", handleMusicLoginPoll(client))
+		r.Get("/login/state", handleMusicLoginState(client))
 	})
 }
 
@@ -126,8 +137,15 @@ func musicAPIBase(cfg baidusync.Config) (string, error) {
 	return strings.TrimSuffix(raw, "/"), nil
 }
 
-// callMusicAPI 调用 go-music-api 并返回原始响应体（透传给前端，少一层结构耦合）。
+// callMusicAPI 调用 go-music-api（GET）并返回原始响应体（透传给前端，少一层结构耦合）。
 func callMusicAPI(ctx context.Context, cfg baidusync.Config, path string, q url.Values) (json.RawMessage, error) {
+	return callMusicAPIRequest(ctx, cfg, http.MethodGet, path, q, nil)
+}
+
+// callMusicAPIRequest 支持指定方法的调用（扫码会话创建为 POST）。
+func callMusicAPIRequest(ctx context.Context, cfg baidusync.Config, method, path string,
+	q url.Values, payload any) (json.RawMessage, error) {
+
 	base, err := musicAPIBase(cfg)
 	if err != nil {
 		return nil, err
@@ -145,9 +163,21 @@ func callMusicAPI(ctx context.Context, cfg baidusync.Config, path string, q url.
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+
+	var reader io.Reader
+	if payload != nil {
+		b, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return nil, mErr
+		}
+		reader = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, method, endpoint, reader)
 	if err != nil {
 		return nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
@@ -162,6 +192,118 @@ func callMusicAPI(ctx context.Context, cfg baidusync.Config, path string, q url.
 		return nil, fmt.Errorf("在线搜索服务返回 %d", resp.StatusCode)
 	}
 	return json.RawMessage(body), nil
+}
+
+// ---------------------------------------------------------------------------
+// 账号登录（扫码 / 登录态查询）
+// ---------------------------------------------------------------------------
+
+// handleMusicLoginSources 返回支持扫码登录的平台。
+func handleMusicLoginSources(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		res, err := callMusicAPI(r.Context(), *cfg, "/api/v1/system/qr_login/sources", nil)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+// handleMusicLoginCreate 创建扫码会话（拿二维码）。
+func handleMusicLoginCreate(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Source string `json:"source"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败: " + err.Error()})
+			return
+		}
+		src := strings.ToLower(strings.TrimSpace(body.Source))
+		if !musicLoginSources[src] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的登录平台"})
+			return
+		}
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		res, err := callMusicAPIRequest(r.Context(), *cfg, http.MethodPost,
+			"/api/v1/system/qr_login/"+src, nil, nil)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, baidusync.SanitizeLoginPayload(res))
+	}
+}
+
+// handleMusicLoginPoll 轮询扫码状态（成功后上游会自动写入 cookies.json）。
+func handleMusicLoginPoll(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		src := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+		key := strings.TrimSpace(r.URL.Query().Get("key"))
+		if !musicLoginSources[src] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的登录平台"})
+			return
+		}
+		if key == "" || len(key) > 512 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少或非法的登录 key"})
+			return
+		}
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		params := url.Values{}
+		params.Set("key", key)
+		res, err := callMusicAPI(r.Context(), *cfg, "/api/v1/system/qr_login/"+src, params)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, baidusync.SanitizeLoginPayload(res))
+	}
+}
+
+// handleMusicLoginState 返回各平台的登录状态。
+//
+// ⚠ 只返回「是否已登录」，**绝不返回 Cookie 内容** —— 上游 /system/cookies 会返回完整凭据。
+func handleMusicLoginState(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := client.GetConfig(r.Context())
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		res, err := callMusicAPI(r.Context(), *cfg, "/api/v1/system/cookies", nil)
+		if err != nil {
+			writeMusicError(w, r.Context(), err)
+			return
+		}
+		var wrapper struct {
+			Data map[string]string `json:"data"`
+		}
+		_ = json.Unmarshal(res, &wrapper)
+		loggedIn := map[string]bool{}
+		cnt := 0
+		for _, s := range []string{"netease", "qq", "kugou", "kuwo", "migu", "bilibili"} {
+			ok := strings.TrimSpace(wrapper.Data[s]) != ""
+			loggedIn[s] = ok
+			if ok {
+				cnt++
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"loggedIn": loggedIn, "count": cnt})
+	}
 }
 
 // ---------------------------------------------------------------------------

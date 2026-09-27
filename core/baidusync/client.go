@@ -96,6 +96,36 @@ func (c *Client) Call(ctx context.Context, action string, params any, out any) e
 	return json.Unmarshal(resp.Data, out)
 }
 
+// SanitizeLoginPayload 剥离上游登录响应中的凭据字段后回传。
+//
+// ⚠ 安全要点：go-music-api 的扫码结果（QRLoginResult）在登录成功后会带上**完整的登录
+// Cookie**（`cookie` / `cookies` 字段）。web 前端只需要展示 qr/status 等非敏感信息，
+// 因此代理层必须在此统一删除，绝不能把账号凭据送回浏览器。
+func SanitizeLoginPayload(raw json.RawMessage) json.RawMessage {
+	var wrapper struct {
+		Code int             `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		return raw
+	}
+	out := map[string]any{"code": wrapper.Code, "msg": wrapper.Msg}
+	if len(wrapper.Data) > 0 {
+		var d map[string]any
+		if err := json.Unmarshal(wrapper.Data, &d); err == nil {
+			delete(d, "cookie")
+			delete(d, "cookies")
+			out["data"] = d
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
 // ---------------------------------------------------------------------------
 // 业务数据结构（与助手保持一致）
 // ---------------------------------------------------------------------------

@@ -45,3 +45,24 @@ export const errMessage = (err) => {
   }
   return (err && err.message) || '未知错误'
 }
+
+// ------ 账号登录（扫码）：登录后可解锁更高音质 ------
+
+export const loginSources = () =>
+  httpClient(`${REST_URL}/musicsearch/login/sources`).then((r) => r.json)
+
+export const loginCreate = (source) =>
+  httpClient(`${REST_URL}/musicsearch/login/qr`, {
+    method: 'POST',
+    body: JSON.stringify({ source }),
+  }).then((r) => r.json)
+
+export const loginPoll = ({ source, key }) =>
+  httpClient(
+    `${REST_URL}/musicsearch/login/qr/status?source=${encodeURIComponent(
+      source,
+    )}&key=${encodeURIComponent(key)}`,
+  ).then((r) => r.json)
+
+export const loginState = () =>
+  httpClient(`${REST_URL}/musicsearch/login/state`).then((r) => r.json)

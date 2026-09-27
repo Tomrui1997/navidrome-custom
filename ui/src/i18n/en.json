@@ -51,6 +51,22 @@
         "adminOnly": "Only administrators can use online search",
         "emptyKeyword": "Please enter a keyword",
         "noSelection": "Please select at least one song"
+      },
+      "login": {
+        "button": "Account",
+        "title": "Sign in to music platforms",
+        "hint": "After signing in, downloads can use higher audio quality (the backend automatically tries the best quality first). Credentials are stored on the server only.",
+        "platform": "Platform",
+        "getQr": "Get QR code",
+        "none": "No platform signed in",
+        "refresh": "Refresh",
+        "placeholder": "Select a platform and click 'Get QR code'",
+        "openOnPhone": "Open this link on your phone to finish signing in:",
+        "copy": "Copy link",
+        "open": "Open link",
+        "close": "Close",
+        "copied": "Link copied",
+        "success": "Signed in successfully"
       }
     },
     "sync": {

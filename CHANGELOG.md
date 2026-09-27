@@ -117,9 +117,27 @@
 | 1 | P0 | 服务端搜索接口一律返回 200 但**永远搜不到歌**，且耗时仅 4–12ms（正常 260ms），日志无任何错误 | 定位为**系统 DNS 在 Go 并发双栈查询下偶发只返回 AAAA**，而本机无 IPv6 出口 → 连接瞬时失败。给该服务单独挂载公共 DNS 的 `resolv.conf`（systemd `BindReadOnlyPaths`），**不影响系统其他服务** |
 | 2 | P1 | 下载大量失败（同一首歌时好时坏，报 404 / “vip or copyright restricted”） | 平台对直链签发有限流：**新增指数退避重试**（1s/4s，最多 3 次），仅对可重试错误（404/5xx/内容过小/网络错误）重试 |
 
+### 4. 新增「扫码登录」（提升下载音质）
+
+- 搜索页顶部新增「账号」按钮 → 扫码登录对话框，支持：**QQ音乐（QQ扫码）/ QQ音乐（微信扫码）/ 网易云 / 酷狗 / Bilibili**
+- 展示方式（**零新增前端依赖**）：QQ 系列上游直接返回二维码图片（data URI / 微信图片 URL）→ 直接展示；其余平台上游只返回 h5 登录链接 → 展示可点击/可复制链接，手机打开即完成确认登录
+- 登录成功后上游自动把 Cookie 写入服务端文件，**页面完全不接触凭据**
+- **音质说明**：查证上游 `music-lib` 已内置「按音质从高到低自动尝试」——VIP 账号依次尝试 母带→全景声→FLAC→640k→320k→128k，非 VIP 尝试 320k→128k，取第一个成功的。因此**无需开发「音质优先开关」**，登录后自动提音质
+
+### 5. 安全加固（本轮）
+
+| 项 | 说明 |
+| --- | --- |
+| 凭据剥离 | 上游扫码成功响应含**完整登录 Cookie**（`cookie`/`cookies`）→ 代理层统一剥离后才回传前端（`baidusync.SanitizeLoginPayload`） |
+| 登录态查询 | `GET /api/musicsearch/login/state` **只返回「是否已登录」**，绝不返回 Cookie 内容 |
+| 地址限制 | baseURL 只允许回环（`127.0.0.1`/`localhost`/`::1`），防止配置被改后成为 SSRF 跳板 |
+
 ### 验证方式
 
-- 本地：`go vet ./tools/nd-helper/... ./core/baidusync/... ./server/nativeapi/...` 0 问题；`go test ./tools/nd-helper/...` **15 个用例全通过**（原 8 + 新增 7：命名清洗/UTF-8 安全截断/扩展名/类型过滤/平台白名单/落点越界/配置校验）
+- 单测：`go test ./core/baidusync/` **3 个新增用例全通过** —— 凭据被彻底剔除（含嵌套 cookies）、异常输入不 panic、二维码/ key 等展示字段保留；助手侧 15 个用例仍全通过
+- 静态检查：`go vet ./server/nativeapi/... ./core/baidusync/...` 0 问题；前端 `npm run build` 通过（无 eslint 错误）
+- 浏览器实测（测试机）：点「账号」→ 对话框正常 → 选「QQ音乐（QQ 扫码）」→ 点「获取二维码」→ **二维码正常渲染** + 状态显示「等待扫码…（二维码未失效。）」
+- 待完成：用真实账号扫码验证「登录成功 → Cookie 落盘 → 下载音质提升」（需用户本人扫码）
 - 前端：`npm run build` 通过（无 eslint 错误），产物已嵌入二进制
 - 端到端（测试机）：搜索「稻香」→ 提交 2 首 → **done=2 failed=0**；落盘 `在线音乐/{艺人}/` 下 mp3 + 同名 `.lrc` + `cover.jpg`，属主均为 `navidrome:navidrome`；Navidrome Watcher 自动扫描 `tracksImported=1`
 - 自动验收（`63-accept-musicsearch.sh`）：**19 项全 PASS** —— 4 个接口未认证返回 401、18080 仅回环且对外 IP 不可达、`MemoryMax=200M` 生效、服务内解析到 IPv4、搜索耗时 0.35s（确认真的出网）、中文关键词有结果、原功能（ping/网盘同步）无回归、go-music-api RSS 42MB / cgroup 峰值 23MB

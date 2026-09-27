@@ -23,6 +23,7 @@ import {
 import { makeStyles } from '@material-ui/core/styles'
 import { useNotify, useTranslate } from 'react-admin'
 import * as api from './api'
+import LoginDialog from './LoginDialog'
 
 // 常用搜索平台（需与后端白名单一致；QQ 在服务端可用，无需 Cookie）
 const SOURCE_OPTIONS = [
@@ -115,6 +116,7 @@ const Search = () => {
   const [selected, setSelected] = useState({})
   const [downloadTypes, setDownloadTypes] = useState(['audio', 'lyric', 'cover'])
   const [task, setTask] = useState(null)
+  const [loginOpen, setLoginOpen] = useState(false)
 
   // 加载服务可用性
   const loadHealth = useCallback(async () => {
@@ -271,6 +273,9 @@ const Search = () => {
       <div className={classes.header}>
         <Typography variant="h5">{translate('resources.musicsearch.title')}</Typography>
         {healthChip}
+        <Button size="small" variant="outlined" onClick={() => setLoginOpen(true)}>
+          {translate('resources.musicsearch.login.button')}
+        </Button>
       </div>
       <Typography variant="body2" color="textSecondary">
         {translate('resources.musicsearch.subtitle')}
@@ -453,6 +458,12 @@ const Search = () => {
           </div>
         </>
       )}
+
+      <LoginDialog
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        onChanged={loadHealth}
+      />
     </div>
   )
 }

@@ -1,0 +1,289 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Button,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
+  Typography,
+} from '@material-ui/core'
+import { makeStyles } from '@material-ui/core/styles'
+import { useNotify, useTranslate } from 'react-admin'
+import * as api from './api'
+
+// 支持扫码登录的平台（与后端白名单一致）
+const LOGIN_OPTIONS = [
+  { id: 'qq', name: 'QQ音乐（QQ 扫码）' },
+  { id: 'qq_wx', name: 'QQ音乐（微信扫码）' },
+  { id: 'netease', name: '网易云音乐' },
+  { id: 'kugou', name: '酷狗音乐' },
+  { id: 'bilibili', name: 'Bilibili' },
+]
+
+const POLL_INTERVAL_MS = 2000
+const MAX_POLL_COUNT = 150 // 约 5 分钟
+
+const STATUS_TEXT = {
+  waiting: '等待扫码…',
+  scanned: '已扫码，请在手机上确认登录',
+  success: '登录成功',
+  expired: '二维码已过期，请重新获取',
+  failed: '登录失败，请重试',
+}
+
+const useStyles = makeStyles((theme) => ({
+  qrBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    marginTop: theme.spacing(2),
+    minHeight: 200,
+    justifyContent: 'center',
+  },
+  qrImg: {
+    width: 200,
+    height: 200,
+    border: '1px solid #e0e0e0',
+    borderRadius: 4,
+    imageRendering: 'pixelated',
+  },
+  linkBox: {
+    width: '100%',
+    wordBreak: 'break-all',
+    background: '#f5f5f5',
+    padding: theme.spacing(1),
+    borderRadius: 4,
+    fontSize: 12,
+  },
+  stateRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    flexWrap: 'wrap',
+    marginTop: theme.spacing(1),
+  },
+}))
+
+// LoginDialog 扫码登录对话框。
+//
+// 说明：
+//   - QQ / QQ微信 上游直接返回二维码图片（data URI 或微信图片 URL），直接展示；
+//   - 网易云 / 酷狗 / Bilibili 上游只返回 h5 登录链接，此处展示链接（手机打开即完成确认登录），
+//     不额外引入二维码生成依赖。
+//   - 登录成功后上游会自动把 Cookie 写入服务端文件，前端拿不到也不需要拿到凭据。
+const LoginDialog = ({ open, onClose, onChanged }) => {
+  const classes = useStyles()
+  const notify = useNotify()
+  const translate = useTranslate()
+
+  const [source, setSource] = useState('qq')
+  const [session, setSession] = useState(null)
+  const [status, setStatus] = useState('')
+  const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [loggedIn, setLoggedIn] = useState({})
+  const pollCount = useRef(0)
+  const timerRef = useRef(null)
+
+  const stopPolling = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
+
+  const loadState = useCallback(async () => {
+    try {
+      const st = await api.loginState()
+      setLoggedIn((st && st.loggedIn) || {})
+    } catch (e) {
+      // 登录态查询失败不阻塞页面
+    }
+  }, [])
+
+  // 打开时重置并刷新登录态
+  useEffect(() => {
+    if (!open) {
+      stopPolling()
+      return undefined
+    }
+    setSession(null)
+    setStatus('')
+    setMessage('')
+    loadState()
+    return stopPolling
+  }, [open, loadState, stopPolling])
+
+  const handleCreate = useCallback(async () => {
+    stopPolling()
+    setLoading(true)
+    setSession(null)
+    setStatus('waiting')
+    setMessage('')
+    try {
+      const res = await api.loginCreate(source)
+      const data = (res && res.data) || {}
+      if (!data.key) {
+        throw new Error((res && res.msg) || '未获取到登录会话')
+      }
+      setSession(data)
+      pollCount.current = 0
+      timerRef.current = setInterval(async () => {
+        pollCount.current += 1
+        if (pollCount.current > MAX_POLL_COUNT) {
+          stopPolling()
+          setStatus('expired')
+          return
+        }
+        try {
+          const pr = await api.loginPoll({ source, key: data.key })
+          const pd = (pr && pr.data) || {}
+          const st = pd.status || ''
+          setStatus(st)
+          setMessage(pd.message || '')
+          if (st === 'success') {
+            stopPolling()
+            notify(translate('resources.musicsearch.login.success'), 'info')
+            await loadState()
+            if (onChanged) onChanged()
+          } else if (st === 'expired' || st === 'failed') {
+            stopPolling()
+          }
+        } catch (e) {
+          // 轮询偶发失败继续重试，直到超时
+        }
+      }, POLL_INTERVAL_MS)
+    } catch (e) {
+      setStatus('failed')
+      setMessage(api.errMessage(e))
+      notify(api.errMessage(e), 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [source, stopPolling, notify, translate, loadState, onChanged])
+
+  const handleClose = () => {
+    stopPolling()
+    onClose()
+  }
+
+  const copiedRef = useRef(null)
+  const handleCopy = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      notify(translate('resources.musicsearch.login.copied'), 'info')
+    } catch (e) {
+      copiedRef.current = text
+      notify('复制失败，请手动选中链接复制', 'warning')
+    }
+  }
+
+  const loggedNames = LOGIN_OPTIONS.filter((o) => loggedIn[o.id]).map((o) => o.name)
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <DialogTitle>{translate('resources.musicsearch.login.title')}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="textSecondary">
+          {translate('resources.musicsearch.login.hint')}
+        </Typography>
+
+        <div className={classes.stateRow}>
+          <Chip
+            size="small"
+            color={loggedNames.length > 0 ? 'primary' : 'default'}
+            label={
+              loggedNames.length > 0
+                ? `已登录：${loggedNames.join('、')}`
+                : translate('resources.musicsearch.login.none')
+            }
+          />
+          <Button size="small" onClick={loadState}>
+            {translate('resources.musicsearch.login.refresh')}
+          </Button>
+        </div>
+
+        <div className={classes.stateRow}>
+          <FormControl variant="outlined" size="small" style={{ minWidth: 220 }}>
+            <InputLabel>{translate('resources.musicsearch.login.platform')}</InputLabel>
+            <Select
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              label={translate('resources.musicsearch.login.platform')}
+            >
+              {LOGIN_OPTIONS.map((o) => (
+                <MenuItem key={o.id} value={o.id}>
+                  {o.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleCreate}
+            disabled={loading}
+          >
+            {loading ? (
+              <CircularProgress size={18} />
+            ) : (
+              translate('resources.musicsearch.login.getQr')
+            )}
+          </Button>
+        </div>
+
+        <div className={classes.qrBox}>
+          {session && session.image_url ? (
+            <img className={classes.qrImg} src={session.image_url} alt="login qr" />
+          ) : session && session.url ? (
+            <>
+              <Typography variant="body2" color="textSecondary">
+                {translate('resources.musicsearch.login.openOnPhone')}
+              </Typography>
+              <div className={classes.linkBox}>{session.url}</div>
+              <div className={classes.stateRow}>
+                <Button size="small" variant="outlined" onClick={() => handleCopy(session.url)}>
+                  {translate('resources.musicsearch.login.copy')}
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  href={session.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {translate('resources.musicsearch.login.open')}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <Typography variant="body2" color="textSecondary">
+              {translate('resources.musicsearch.login.placeholder')}
+            </Typography>
+          )}
+          {status && (
+            <Typography
+              variant="body2"
+              color={status === 'success' ? 'primary' : 'textSecondary'}
+            >
+              {STATUS_TEXT[status] || status}
+              {message ? `（${message}）` : ''}
+            </Typography>
+          )}
+        </div>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose}>{translate('resources.musicsearch.login.close')}</Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+export default LoginDialog
