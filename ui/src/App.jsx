@@ -124,9 +124,11 @@ const Admin = (props) => {
       {...props}
     >
       {(permissions) => [
+        // 歌曲资源放在首位：react-admin 在没有 dashboard 时会把「/」重定向到第一个
+        // 资源，因此默认进入歌曲页；用户多数场景是按歌名找歌，避免误落在专辑页搜不到
+        <Resource name="song" {...song} />,
         <Resource name="album" {...album} options={{ subMenu: 'albumList' }} />,
         <Resource name="artist" {...artist} />,
-        <Resource name="song" {...song} />,
         <Resource
           name="radio"
           {...(permissions === 'admin' ? radio.admin : radio.all)}

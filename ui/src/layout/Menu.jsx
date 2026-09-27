@@ -113,6 +113,10 @@ const Menu = ({ dense = false }) => {
       })}
     >
       {open && <LibrarySelector />}
+      {/* 「歌曲」提到专辑之前：用户多数场景是按歌名找歌，放首位减少误到专辑页搜索 */}
+      {resources
+        .filter((r) => r.name === 'song')
+        .map(renderResourceMenuItemLink)}
       <SubMenu
         handleToggle={() => handleToggle('menuAlbumList')}
         isOpen={state.menuAlbumList}
@@ -125,7 +129,10 @@ const Menu = ({ dense = false }) => {
           renderAlbumMenuItemLink(type, albumLists[type]),
         )}
       </SubMenu>
-      {resources.filter(subItems(undefined)).map(renderResourceMenuItemLink)}
+      {resources
+        .filter(subItems(undefined))
+        .filter((r) => r.name !== 'song')
+        .map(renderResourceMenuItemLink)}
       {config.devSidebarPlaylists && open ? (
         <>
           <Divider />
