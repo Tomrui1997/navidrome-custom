@@ -123,7 +123,7 @@
 - 前端：`npm run build` 通过（无 eslint 错误），产物已嵌入二进制
 - 端到端（测试机）：搜索「稻香」→ 提交 2 首 → **done=2 failed=0**；落盘 `在线音乐/{艺人}/` 下 mp3 + 同名 `.lrc` + `cover.jpg`，属主均为 `navidrome:navidrome`；Navidrome Watcher 自动扫描 `tracksImported=1`
 - 自动验收（`63-accept-musicsearch.sh`）：**19 项全 PASS** —— 4 个接口未认证返回 401、18080 仅回环且对外 IP 不可达、`MemoryMax=200M` 生效、服务内解析到 IPv4、搜索耗时 0.35s（确认真的出网）、中文关键词有结果、原功能（ping/网盘同步）无回归、go-music-api RSS 42MB / cgroup 峰值 23MB
-- 人工验收：登录管理员浏览器打开 `/app/#/musicsearch` 搜索并下载，确认入库（待执行）
+- 人工验收（**已完成**）：管理员登录浏览器打开 `/app/#/musicsearch` → 搜索「周杰伦 稻香」返回 **24 条多平台结果**（kuwo/kugou/netease/migu）→ 勾选 2 首点「下载选中」→ 页面显示「上次下载：完成 2 跳过 0 失败 0」→ 服务器实落 `在线音乐/周杰伦/周杰伦 - 稻香.mp3`(3.6MB) + 同名 `.lrc`(2071B) + `cover.jpg`，属主均 `navidrome:navidrome` → Navidrome 自动扫描 `tracksImported=2`
 
 ### 9. 新增「单次同步文件数上限」（测试提速）
 
