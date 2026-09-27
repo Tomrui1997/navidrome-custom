@@ -31,7 +31,8 @@
         "duration": "时长",
         "size": "大小",
         "bitrate": "码率",
-        "source": "平台"
+        "source": "平台",
+        "download": "下载"
       },
       "task": {
         "running": "下载中",

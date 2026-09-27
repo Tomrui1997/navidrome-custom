@@ -25,7 +25,7 @@ import {
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 import { useNotify, useTranslate } from 'react-admin'
-import { MdPlayArrow, MdStop } from 'react-icons/md'
+import { MdFileDownload, MdPlayArrow, MdStop } from 'react-icons/md'
 import { REST_URL } from '../consts'
 import { baseUrl } from '../utils'
 import * as api from './api'
@@ -68,11 +68,21 @@ const useStyles = makeStyles((theme) => ({
   table: { marginTop: theme.spacing(2) },
   head: { fontWeight: 600 },
   progressBox: { marginTop: theme.spacing(2) },
+  // 结果列表可能很长（跨平台去重后常有 20~40 条），操作栏必须吸附在视口底部，
+  // 否则每次批量下载都要滚到底才能点到「下载选中」（真实体验问题）。
+  // 必须给不透明背景 + 上边框，否则滚动内容会透过操作栏。
   footer: {
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(2),
     marginTop: theme.spacing(2),
+    position: 'sticky',
+    bottom: 0,
+    zIndex: 2,
+    padding: theme.spacing(1, 2),
+    background: theme.palette.background.paper,
+    borderTop: `1px solid ${theme.palette.divider}`,
+    borderBottom: `1px solid ${theme.palette.divider}`,
   },
   errList: {
     margin: 0,
@@ -219,12 +229,9 @@ const Search = () => {
     setSelected(next)
   }
 
-  const handleDownload = async () => {
-    const items = Object.values(selected)
-    if (items.length === 0) {
-      notify(translate('resources.musicsearch.errors.noSelection'), 'warning')
-      return
-    }
+  // 提交下载任务：底部「下载选中」与行内单曲下载共用，避免两处逻辑漂移。
+  const submitDownload = async (items) => {
+    if (items.length === 0) return
     if (downloadTypes.length === 0) {
       notify('请至少选择一种下载内容', 'warning')
       return
@@ -248,6 +255,18 @@ const Search = () => {
       notify(api.errMessage(e), 'error')
     }
   }
+
+  const handleDownload = () => {
+    const items = Object.values(selected)
+    if (items.length === 0) {
+      notify(translate('resources.musicsearch.errors.noSelection'), 'warning')
+      return
+    }
+    submitDownload(items)
+  }
+
+  // 行内单曲下载：无需勾选、也无需滚到底，直接下载当前这一首（下载内容沿用上方勾选项）。
+  const handleRowDownload = (it) => submitDownload([it])
 
   const handleCancel = async () => {
     try {
@@ -482,6 +501,10 @@ const Search = () => {
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.size')}</TableCell>
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.bitrate')}</TableCell>
                   <TableCell className={classes.head}>{translate('resources.musicsearch.table.source')}</TableCell>
+                  {/* 行内下载按钮紧跟在「平台」之后：结果很多时无需滚到底部 */}
+                  <TableCell className={classes.head} padding="none">
+                    {translate('resources.musicsearch.table.download')}
+                  </TableCell>
                   {previewOn && <TableCell className={classes.head}>试听</TableCell>}
                 </TableRow>
               </TableHead>
@@ -503,6 +526,22 @@ const Search = () => {
                     <TableCell>{fmtSize(it.size)}</TableCell>
                     <TableCell>{it.bitrate ? `${it.bitrate} kbps` : '-'}</TableCell>
                     <TableCell>{it.source}</TableCell>
+                    <TableCell padding="none">
+                      <Tooltip
+                        title={running ? '下载任务进行中，请稍候' : '下载这首（内容按上方勾选项）'}
+                      >
+                        {/* 用 span 包一层：disabled 的 IconButton 不触发事件，Tooltip 需要一个可 hover 的元素 */}
+                        <span>
+                          <IconButton
+                            size="small"
+                            disabled={!canDownload || running}
+                            onClick={() => handleRowDownload(it)}
+                          >
+                            <MdFileDownload fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </TableCell>
                     {previewOn && (
                       <TableCell padding="none">
                         <Tooltip title={playingKey === itemKey(it) ? '停止' : '试听'}>

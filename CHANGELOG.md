@@ -271,6 +271,49 @@
 - **线上 bundle**：`index-BRWUxGXO.js` → `index-DdVoOeF6.js`（确认新产物已生效）
 - **测试环境**同样验证通过（截图确认二维码清晰 + 链接文字可见）
 
+### 13. 优化：搜索结果「下载」按钮位置（结果多时不必滚到底）
+
+- **问题**：`下载选中` 只在表格**之后**的底部操作栏里；跨平台去重后结果常有 20~40 条，每次都要滚到底才能点到
+- **优化 ①（行内下载）**：在「平台」列**之后**新增一列「下载」，每行一个图标按钮，点一下即下载该首
+  （下载内容沿用上方「下载内容」勾选项；下载任务进行中按钮置灰并给出提示）
+- **优化 ②（吸底操作栏）**：底部操作栏改为 `position: sticky; bottom: 0`，并给不透明背景 + 上下分隔线，
+  滚动时始终可见（批量勾选下载也不用滚到底）
+- **优化 ③（消除重复逻辑）**：抽出 `submitDownload(items)`，行内单曲与底部批量共用同一段提交逻辑，避免两处漂移
+
+### 验证方式（下载按钮优化）
+
+- **表头顺序实测**：`["", 标题, 艺人, 专辑, 时长, 大小, 码率, 平台, **下载**, 试听]` → 下载列确实紧跟「平台」
+- **行内下载端到端**：点「晴天 / 周杰伦 / kuwo」行内的下载按钮 → 抓包 `POST /api/musicsearch/download`，
+  **`items` 长度为 1**、`types=["audio","lyric","cover"]`、首项 `周杰伦 - 晴天 [kuwo]`；
+  页面随即显示「**上次下载：完成 1　跳过 0　失败 0**」（确认真的入库）
+- **吸底实测**：`getComputedStyle(footer)` → `position: sticky` / `bottom: 0px` / 不透明背景 `rgb(66,66,66)` / `z-index: 2`；
+  滚动到表格中段时操作栏仍固定在视口底部（已截图确认）
+
+### 14. 运维：生产 SSL 证书续期（腾讯云手动 → Let's Encrypt 自动）
+
+- **背景**：原证书为腾讯云免费 DV（TrustAsia，仅 `lxssc.com` 可达），**2026-10-05 到期、仅剩 7 天**，且**无任何自动续期机制**
+- **方案**：改用 **acme.sh + Let's Encrypt**，webroot 模式（HTTP-01）
+- **零 nginx 改动**：复用现有 `root /opt/personal-blog/frontend-user` 与 `location / { try_files $uri $uri/ /index.html; }`，
+  ACME 挑战文件直接落在该 webroot 下（已实测公网可取回）→ **未修改任何 nginx 配置**
+- **签发**：`lxssc.com` + `www.lxssc.com`（用户先补齐了 www 的 A 记录），ECC ec-256，fullchain 共 4 张
+- **自动续期**：`acme.sh --cron`（crontab 每天 4 次：4/10/16/22 点 13 分）+ `Le_ReloadCmd` 已保存 → 续期后自动 reload nginx
+- **顺带加固**：私钥权限由 **644 收紧为 600**（原先任意用户可读）
+- **回滚留档**：`/root/ssl-backups/lxssc.com_{bundle.crt,key}.trustasia.final.<时间戳>`
+
+### 验证方式（SSL）
+
+- **线上握手**（`lxssc.com` 与 `www.lxssc.com` 各一次）：`issuer=O=Let's Encrypt, CN=YE1`，
+  **`notAfter = Dec 26 16:36:09 2026 GMT`（剩余 89 天，原来 7 天）**，`Verify return code: 0 (ok)`
+- 证书与私钥公钥 SHA256 一致（匹配校验通过）；`nginx -t` 通过并已 reload；浏览器访问**无证书告警**
+- 业务回归：首页 200 / 管理后台 200 / `/music/` 302（BaseURL 重定向正常）
+- 续期机制：`crond` active + enabled；`crontab -l` 可见 acme.sh 任务；域名 conf 内含 `Le_Webroot` / `Le_ReloadCmd` / `Le_Keylength=ec-256`
+
+#### 过程中踩的坑（留档）
+- **`--staging` 与 `--server letsencrypt` 同时使用时后者会覆盖 staging** → 所谓「演练」实际签发了正式证书
+- acme.sh 默认使用 **ECC**，证书目录是 `lxssc.com_ecc`（不是 `lxssc.com`）；脚本按错目录找会报「找不到签发结果」而中止
+  （该中止发生在**安装之前**，线上证书未被改动 —— 已验证）
+
+
 
 
 

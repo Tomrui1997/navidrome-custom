@@ -31,7 +31,8 @@
         "duration": "Duration",
         "size": "Size",
         "bitrate": "Bitrate",
-        "source": "Platform"
+        "source": "Platform",
+        "download": "Download"
       },
       "task": {
         "running": "Downloading",
