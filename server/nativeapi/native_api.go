@@ -99,6 +99,8 @@ func (api *Router) routes() http.Handler {
 			// 百度网盘同步与媒体库管理（删除/回收站）：涉及凭据与文件系统写操作，仅管理员
 			api.addBaiduSyncRoute(r)
 			api.addMediaOpsRoute(r)
+			// 本地重复歌曲检测：只读；清理复用 mediaops 的删除通道（含 dryRun 与软删）
+			api.addDuplicatesRoute(r)
 			// 在线音乐搜索与下载入库：会出网访问第三方音乐平台并写入音乐目录，仅管理员
 			api.addMusicSearchRoute(r)
 			api.RX(r, "/library", api.libs.NewRepository, true)

@@ -1,6 +1,35 @@
 {
   "languageName": "简体中文",
   "resources": {
+    "duplicates": {
+      "name": "重复歌曲",
+      "detect": "重新检测",
+      "clean": "一键清理重复项",
+      "detectFailed": "检测失败",
+      "cleanFailed": "清理失败",
+      "summary": "共扫描 %{scanned} 首，发现 %{groups} 组重复，可清理 %{redundant} 首",
+      "none": "未发现重复歌曲",
+      "sameContent": "内容完全一致",
+      "diffContent": "组内有不同版本（已各保留一份）",
+      "groupCount": "组内 %{count} 首",
+      "colPath": "路径",
+      "colSize": "大小",
+      "colBitrate": "码率",
+      "colFormat": "格式",
+      "colState": "状态",
+      "keep": "保留",
+      "remove": "待删除",
+      "missing": "文件缺失",
+      "namesDiffer": "名称不同但内容一致",
+      "contentDupTitle": "内容重复（%{count} 份）",
+      "nothingAllowed": "服务端校验后没有可删除的项",
+      "rejected": "服务端拦下了 %{count} 项（保留项不允许删除）",
+      "confirmTitle": "确认清理重复项",
+      "confirmBody": "将删除 %{count} 首重复歌曲：库记录、本地文件与网盘文件会同时清理。本地文件进回收站、网盘进 /_deleted/ 目录，均可恢复。",
+      "execute": "确认清理",
+      "cancel": "取消",
+      "done": "清理完成：库记录 %{db} 首，本地 %{local} 个文件，网盘 %{remote} 个文件"
+    },
     "musicsearch": {
       "title": "在线音乐搜索",
       "subtitle": "跨平台搜索歌曲并下载到本地音乐库",
@@ -791,6 +820,9 @@
     "library": "媒体库",
     "musicSearch": {
       "name": "在线搜索"
+    },
+    "duplicates": {
+      "name": "重复歌曲"
     },
     "librarySelector": {
       "allLibraries": "全部媒体库 (%{count})",

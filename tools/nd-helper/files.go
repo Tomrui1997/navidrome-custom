@@ -75,6 +75,19 @@ type TrashEntry struct {
 // 路径安全校验
 // ---------------------------------------------------------------------------
 
+// isRemoteNotFound 判断 baidupcs 的报错是否属于「源文件不存在」。
+// baidupcs 对不存在的路径返回形如：远端服务器返回错误, 代码: -9, 消息: 文件不存在
+func isRemoteNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "文件不存在") ||
+		strings.Contains(msg, "代码: -9") ||
+		strings.Contains(msg, "file not found") ||
+		strings.Contains(msg, "not exist")
+}
+
 // cleanAbs 返回规范化后的绝对路径。
 func cleanAbs(p string) string {
 	if !filepath.IsAbs(p) {
@@ -250,7 +263,17 @@ func (s *Server) actionDelete(p DeleteParams) (any, error) {
 							_, err = s.baidupcs("mv", item.RemotePath, dest)
 						}
 						if err != nil {
-							r.Remote = "failed"
+							// 网盘侧源文件不存在（本地库里有、但网盘上已被移走/改名/早已删除）时，
+							// 必须视为「已不存在」而不是失败：否则会连带阻塞库记录的删除，
+							// 导致库里残留一堆指向不存在文件的记录（实测踩到过：59 条）。
+							if isRemoteNotFound(err) {
+								r.Remote = "skipped"
+								if r.Reason == "" {
+									r.Reason = "网盘上已不存在该文件（跳过）"
+								}
+							} else {
+								r.Remote = "failed"
+							}
 						} else {
 							r.Remote = "ok"
 							// 若网盘侧先于本地记录了条目（仅网盘软删），补一条

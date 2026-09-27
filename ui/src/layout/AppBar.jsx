@@ -20,6 +20,7 @@ import { AboutDialog, QuickConnectDialog } from '../dialogs'
 import PersonalMenu from './PersonalMenu'
 import SyncMenu from './SyncMenu'
 import SearchMenu from './SearchMenu'
+import DuplicatesMenu from './DuplicatesMenu'
 import ActivityPanel from './ActivityPanel'
 import NowPlayingPanel from './NowPlayingPanel'
 import UserMenu from './UserMenu'
@@ -139,6 +140,10 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         )}
         {permissions === 'admin' && (
           <SearchMenu sidebarIsOpen={true} onClick={onClick} />
+        )}
+        {/* 重复歌曲检测与一键清理（仅管理员；清理会同时删本地与网盘，走软删可恢复） */}
+        {permissions === 'admin' && (
+          <DuplicatesMenu sidebarIsOpen={true} onClick={onClick} />
         )}
         {config.enableQuickConnect && (
           <DialogMenuItem

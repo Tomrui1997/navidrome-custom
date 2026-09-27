@@ -1,6 +1,35 @@
 {
   "languageName": "English",
   "resources": {
+    "duplicates": {
+      "name": "Duplicate Songs",
+      "detect": "Re-scan",
+      "clean": "Clean duplicates",
+      "detectFailed": "Detection failed",
+      "cleanFailed": "Cleanup failed",
+      "summary": "Scanned %{scanned} tracks, found %{groups} duplicate groups, %{redundant} removable",
+      "none": "No duplicate songs found",
+      "sameContent": "Identical content",
+      "diffContent": "Multiple versions in this group (one kept each)",
+      "groupCount": "%{count} tracks",
+      "colPath": "Path",
+      "colSize": "Size",
+      "colBitrate": "Bitrate",
+      "colFormat": "Format",
+      "colState": "State",
+      "keep": "Keep",
+      "remove": "Remove",
+      "missing": "file missing",
+      "namesDiffer": "Same content, different names",
+      "contentDupTitle": "Content duplicates (%{count} copies)",
+      "nothingAllowed": "Nothing to remove after server-side verification",
+      "rejected": "The server blocked %{count} item(s) (kept tracks cannot be removed)",
+      "confirmTitle": "Confirm duplicate cleanup",
+      "confirmBody": "%{count} duplicate tracks will be removed from the library record, the local files and the cloud drive at the same time. Local files go to the trash and cloud files to /_deleted/, both are restorable.",
+      "execute": "Confirm",
+      "cancel": "Cancel",
+      "done": "Cleanup finished: %{db} library records, %{local} local files, %{remote} cloud files"
+    },
     "musicsearch": {
       "title": "Online Music Search",
       "subtitle": "Search songs across music platforms and download them into your library",
@@ -794,6 +823,9 @@
     "library": "Library",
     "musicSearch": {
       "name": "Online Search"
+    },
+    "duplicates": {
+      "name": "Duplicate Songs"
     },
     "sync": {
       "name": "Sync"
