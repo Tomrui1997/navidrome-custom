@@ -20,11 +20,13 @@ import * as api from './api'
 
 // 支持扫码登录的平台（与后端白名单一致）
 // accountName 用于「已登录」徽章：QQ 与微信扫码都会写入同一个 qq 凭据，故徽章统一显示该账号体系名
+// linkOnly=true 的平台不渲染二维码，改用「链接登录」：酷狗 App 对网页二维码支持不佳，
+// 且实测登录链接需要在手机浏览器打开才能完成确认。
 const LOGIN_OPTIONS = [
   { id: 'qq', name: 'QQ音乐（QQ 扫码）', accountName: 'QQ音乐' },
   { id: 'qq_wx', name: 'QQ音乐（微信扫码）', accountName: 'QQ音乐' },
   { id: 'netease', name: '网易云音乐', accountName: '网易云音乐' },
-  { id: 'kugou', name: '酷狗音乐', accountName: '酷狗音乐' },
+  { id: 'kugou', name: '酷狗音乐（链接登录）', accountName: '酷狗音乐', linkOnly: true },
   { id: 'bilibili', name: 'Bilibili', accountName: 'Bilibili' },
 ]
 
@@ -91,9 +93,11 @@ const useStyles = makeStyles((theme) => ({
 //
 // 说明：
 //   - QQ / QQ微信 上游直接返回二维码图片（data URI 或微信图片 URL），直接展示；
-//   - 网易云 / 酷狗 / Bilibili 上游只返回 h5 登录链接 → 用 qrcode.react **本地**渲染成二维码，
+//   - 网易云 / Bilibili 上游只返回 h5 登录链接 → 用 qrcode.react **本地**渲染成二维码，
 //     手机扫码即完成确认登录。**不引导用户在电脑上打开该链接**：实测电脑打开会被平台跳到
 //     App 下载页（非登录页），且该链接本就是给手机用的。
+//   - **酷狗**例外：改为「链接登录」—— 只展示链接 + 复制/打开按钮，让用户把链接发到
+//     手机浏览器打开（酷狗 App 对网页二维码支持不佳）。
 //   - 二维码在本地生成，不依赖任何外部服务（登录链接含一次性 token，不能外传给第三方）。
 //   - 登录成功后上游会自动把 Cookie 写入服务端文件，前端拿不到也不需要拿到凭据。
 const LoginDialog = ({ open, onClose, onChanged }) => {
@@ -208,6 +212,10 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
     ...new Set(LOGIN_OPTIONS.filter((o) => loggedIn[o.id]).map((o) => o.accountName)),
   ]
 
+  // 当前平台是否为「链接登录」（酷狗）：不渲染二维码，只给链接与复制/打开按钮
+  const currentOption = LOGIN_OPTIONS.find((o) => o.id === source)
+  const linkOnly = Boolean(currentOption && currentOption.linkOnly)
+
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>{translate('resources.musicsearch.login.title')}</DialogTitle>
@@ -254,6 +262,8 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
           >
             {loading ? (
               <CircularProgress size={18} />
+            ) : linkOnly ? (
+              translate('resources.musicsearch.login.getLink')
             ) : (
               translate('resources.musicsearch.login.getQr')
             )}
@@ -264,26 +274,53 @@ const LoginDialog = ({ open, onClose, onChanged }) => {
           {session && session.image_url ? (
             <img className={classes.qrImg} src={session.image_url} alt="login qr" />
           ) : session && session.url ? (
-            <>
-              <QRCodeSVG
-                className={classes.qrSvg}
-                value={session.url}
-                size={200}
-                level="M"
-                includeMargin
-                bgColor="#ffffff"
-                fgColor="#000000"
-              />
-              <Typography variant="body2" color="textSecondary">
-                {translate('resources.musicsearch.login.openOnPhone')}
-              </Typography>
-              <div className={classes.linkBox}>{session.url}</div>
-              <div className={classes.stateRow}>
-                <Button size="small" variant="outlined" onClick={() => handleCopy(session.url)}>
-                  {translate('resources.musicsearch.login.copy')}
-                </Button>
-              </div>
-            </>
+            linkOnly ? (
+              // 链接登录（酷狗）：不渲染二维码，避免手机扫码后交给 App 打不开的坑
+              <>
+                <Typography variant="body2" color="textSecondary">
+                  {translate('resources.musicsearch.login.openInPhoneBrowser')}
+                </Typography>
+                <div className={classes.linkBox}>{session.url}</div>
+                <div className={classes.stateRow}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => handleCopy(session.url)}
+                  >
+                    {translate('resources.musicsearch.login.copy')}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="primary"
+                    onClick={() => window.open(session.url, '_blank', 'noopener')}
+                  >
+                    {translate('resources.musicsearch.login.open')}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <QRCodeSVG
+                  className={classes.qrSvg}
+                  value={session.url}
+                  size={200}
+                  level="M"
+                  includeMargin
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                />
+                <Typography variant="body2" color="textSecondary">
+                  {translate('resources.musicsearch.login.openOnPhone')}
+                </Typography>
+                <div className={classes.linkBox}>{session.url}</div>
+                <div className={classes.stateRow}>
+                  <Button size="small" variant="outlined" onClick={() => handleCopy(session.url)}>
+                    {translate('resources.musicsearch.login.copy')}
+                  </Button>
+                </div>
+              </>
+            )
           ) : (
             <Typography variant="body2" color="textSecondary">
               {translate('resources.musicsearch.login.placeholder')}

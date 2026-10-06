@@ -548,6 +548,21 @@
 - **验证**：新增用例断言默认 `sources=netease,kuwo,migu`（`Search.preview.test.jsx` **3/3 通过**）；
   `npx vitest run src/musicsearch` **14/14 通过**；`npm run lint` **0 问题**；`npm run build` 成功
 
+### 24. 酷狗登录改为「链接登录」（不再渲染二维码）
+
+- **背景**：酷狗 App 对网页二维码支持不佳（扫码后无法完成确认）；
+  原始做法是「展示登录链接 + 在手机浏览器打开」
+- **改动**：
+  1. `ui/src/musicsearch/LoginDialog.jsx`：平台项加 `linkOnly` 标记（酷狗只走链接登录）——
+     该平台**不渲染二维码**，改为「提示 + 链接 + 复制链接 + 打开链接」；
+     按钮文案随平台切换为「获取登录链接」（其它平台仍为「获取二维码」）
+  2. i18n 新增 `getLink` / `openInPhoneBrowser` 两个键（`resources/i18n/zh-Hans.json` 与
+     `ui/src/i18n/en.json` **同步新增**，键位对等 16/16）
+- **验证**：新增 `ui/src/musicsearch/LoginDialog.test.jsx` 2 用例（酷狗不出现二维码、
+  「打开链接」可点且用 `window.open` 打开；网易云仍渲染二维码不回归）→
+  `npx vitest run src/musicsearch` **16/16 通过**；`npx eslint src/musicsearch` 0 问题；
+  `npm run build` 成功；两个 i18n JSON 解析通过且键位对等
+
 > 本机环境坑（记录）：在 `ui/` 下先跑 `npm run build` 再跑 `vitest`，
 > 偶发收集期报错 `Cannot read properties of undefined (reading 'config')` ——
 > 删除 `ui/node_modules/.vite` 后即恢复，属 vite 缓存问题，与代码无关。
