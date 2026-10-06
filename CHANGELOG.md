@@ -536,6 +536,18 @@
   新增组件级测试 `ui/src/musicsearch/Search.preview.test.jsx`（2 用例：
   首条平台无音源时自动切换同名其它平台播放、全部无音源时提示后端真实原因）
 
+### 23. 在线搜索默认平台去掉酷狗（平台侧不再下发直链）
+
+- **背景（生产实测结论）**：酷狗已不对免登录/网页扫码登录态下发播放直链 ——
+  免费 `songinfo` 返回 `errcode=0` 但 URL 为空（原始响应 `fail_process=12`）；
+  带权限的接口 `wwwapi.kugou.com/play/songinfo` 要求 **App 端字段 `t` / `KugooID`**，
+  而库的酷狗扫码登录只写入 `token`/`userid`/设备字段（实测 `isVip=false`、7 个字段、288 字节），
+  因此用户按默认勾选搜索时会频繁撞到「无可用音源」
+- **改动**：`ui/src/musicsearch/Search.jsx` 默认勾选平台由 `网易云 / 酷狗 / 酷我 / 咪咕`
+  改为 **`网易云 / 酷我 / 咪咕`**；酷狗仍保留在平台列表里可**手动勾选**（不删除能力）
+- **验证**：新增用例断言默认 `sources=netease,kuwo,migu`（`Search.preview.test.jsx` **3/3 通过**）；
+  `npx vitest run src/musicsearch` **14/14 通过**；`npm run lint` **0 问题**；`npm run build` 成功
+
 > 本机环境坑（记录）：在 `ui/` 下先跑 `npm run build` 再跑 `vitest`，
 > 偶发收集期报错 `Cannot read properties of undefined (reading 'config')` ——
 > 删除 `ui/node_modules/.vite` 后即恢复，属 vite 缓存问题，与代码无关。

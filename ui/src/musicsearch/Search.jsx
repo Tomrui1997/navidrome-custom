@@ -140,7 +140,10 @@ const Search = () => {
 
   const [keyword, setKeyword] = useState('')
   const [searchType, setSearchType] = useState('song')
-  const [sources, setSources] = useState(['netease', 'kugou', 'kuwo', 'migu'])
+  // 默认勾选的搜索平台。为何不含酷狗：酷狗平台侧已不对免登录/网页登录态下发播放直链
+  // （免费 songinfo 返回 fail_process=12，带权限的接口又要求 App 端字段 t/KugooID），
+  // 勾上只会让用户频繁撞到「无可用音源」；如需仍然可以手动勾选。
+  const [sources, setSources] = useState(['netease', 'kuwo', 'migu'])
   const [health, setHealth] = useState(null)
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)

@@ -116,4 +116,12 @@ describe('<Search /> 试听', () => {
       )
     })
   })
+
+  // 酷狗平台侧不下发直链，默认勾选只会让用户频繁撞到「无可用音源」
+  it('默认搜索平台不含酷狗，仍含网易云/酷我/咪咕', async () => {
+    await renderAndSearch()
+    expect(api.searchMusic).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: 'netease,kuwo,migu' }),
+    )
+  })
 })
