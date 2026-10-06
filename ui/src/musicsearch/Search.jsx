@@ -26,8 +26,6 @@ import {
 import { makeStyles } from '@material-ui/core/styles'
 import { useNotify, useTranslate } from 'react-admin'
 import { MdFileDownload, MdPlayArrow, MdStop } from 'react-icons/md'
-import { REST_URL } from '../consts'
-import { baseUrl } from '../utils'
 import * as api from './api'
 import LoginDialog from './LoginDialog'
 
@@ -114,6 +112,17 @@ const fmtSize = (bytes) => {
 
 // 唯一键：同一首歌可能在不同平台都存在
 const itemKey = (it) => `${it.source || ''}:${it.id}`
+
+// 平台英文 id -> 中文名（通知文案用）
+const sourceLabel = (id) =>
+  (SOURCE_OPTIONS.find((s) => s.id === id) || {}).name || id
+
+// 同名判定：标题忽略空白与大小写（同一首歌在各平台标题格式常有差异）
+const normalizeTitle = (title) =>
+  (title || '').replace(/\s+/g, '').toLowerCase()
+
+// 试听自动降级时最多额外尝试的平台数：避免一次点击打出过多请求
+const MAX_PREVIEW_FALLBACK = 3
 
 // go-music-api 返回 { code, msg, data: { songs, albums, playlists } }
 const normalizeResults = (res, searchType) => {
@@ -300,9 +309,29 @@ const Search = () => {
   // 助手快照保留了失败项**原始条目**，可直接作为新任务重试
   const failedItems = !running && task && Array.isArray(task.failedItems) ? task.failedItems : []
 
-  // 试听：<audio> 无法携带 Authorization 头，改用 Navidrome 的 ?jwt= 查询参数认证（与 /api/events 同一机制）
-  const togglePreview = useCallback(
+  // 同名异平台候选：搜索结果按平台各返回一份，某平台无音源时可自动降级到其它平台。
+  const previewCandidates = useCallback(
     (it) => {
+      const title = normalizeTitle(it.name)
+      if (!title) return []
+      return results
+        .filter(
+          (x) =>
+            x.__kind === 'song' &&
+            x.source !== it.source &&
+            normalizeTitle(x.name) === title,
+        )
+        .slice(0, MAX_PREVIEW_FALLBACK)
+    },
+    [results],
+  )
+
+  // 试听：<audio> 无法携带 Authorization 头，改用 Navidrome 的 ?jwt= 查询参数认证（与 /api/events 同一机制）。
+  // 播放前先做一次 1 字节预检，把后端返回的真实原因提示给用户；否则浏览器只会抛
+  // 「no supported source was found」，无法区分平台风控、无音源、开关未开与登录过期。
+  // 首条无音源时依次尝试同名异平台候选（QQ/酷狗部分歌曲受版权限制无直链，换平台往往能放）。
+  const togglePreview = useCallback(
+    async (it) => {
       const audio = audioRef.current
       if (!audio) return
       const key = itemKey(it)
@@ -311,17 +340,40 @@ const Search = () => {
         setPlayingKey('')
         return
       }
-      const token = window.localStorage.getItem('token') || ''
-      // 必须用 baseUrl() 前缀：生产环境通过 nginx 子路径 /music 反代（config.baseURL=/music），
-      // 若直接用 REST_URL（=/api）会请求到站根 /api/... → 被 nginx 路由到博客后端而拿到 404，
-      // 浏览器表现为「no supported source was found」。此处与 eventStream.js 的写法保持一致。
-      audio.src = baseUrl(
-        `${REST_URL}/musicsearch/preview?id=${encodeURIComponent(
-          it.id,
-        )}&source=${encodeURIComponent(
-          it.source || '',
-        )}&jwt=${encodeURIComponent(token)}`,
-      )
+      let target = null
+      let lastProbe = null
+      for (const cand of [it, ...previewCandidates(it)]) {
+        const candUrl = api.previewUrl(cand)
+        let probe
+        try {
+          probe = await api.probePreview(candUrl)
+        } catch (e) {
+          // 预检请求本身失败（如断网）：降级为直接交给 <audio>，由播放失败分支兜底提示
+          probe = { ok: true }
+        }
+        if (probe.ok) {
+          target = { item: cand, url: candUrl }
+          break
+        }
+        lastProbe = probe
+      }
+      if (!target) {
+        notify(
+          `试听失败：${api.previewErrorMessage(lastProbe || {})}`,
+          'error',
+        )
+        setPlayingKey('')
+        return
+      }
+      if (target.item.source !== it.source) {
+        notify(
+          `当前平台无可用音源，已自动切换 ${sourceLabel(
+            target.item.source,
+          )} 播放`,
+          'info',
+        )
+      }
+      audio.src = target.url
       audio.play().then(
         () => setPlayingKey(key),
         (e) => {
@@ -333,7 +385,7 @@ const Search = () => {
         },
       )
     },
-    [playingKey, notify],
+    [playingKey, previewCandidates, notify],
   )
 
   const handlePreviewToggle = async (checked) => {
@@ -389,7 +441,8 @@ const Search = () => {
       </div>
       <Typography variant="body2" color="textSecondary">
         {translate('resources.musicsearch.subtitle')}
-        {health?.dir ? `　入库目录：${health.dir}` : ''}
+        {/* 前导全角空格写成 \u3000 转义：源码里直接写 U+3000 会触发 ESLint no-irregular-whitespace */}
+        {health?.dir ? `\u3000入库目录：${health.dir}` : ''}
       </Typography>
 
       <Paper className={classes.bar} style={{ padding: 12 }}>
@@ -525,6 +578,8 @@ const Search = () => {
                         <span>
                           <IconButton
                             size="small"
+                            // 图标按钮无可读文本，补 aria-label 便于无障碍阅读与单测定位
+                            aria-label="下载这首"
                             disabled={!canDownload || running}
                             onClick={() => handleRowDownload(it)}
                           >
@@ -536,7 +591,11 @@ const Search = () => {
                     {previewOn && (
                       <TableCell padding="none">
                         <Tooltip title={playingKey === itemKey(it) ? '停止' : '试听'}>
-                          <IconButton size="small" onClick={() => togglePreview(it)}>
+                          <IconButton
+                            size="small"
+                            aria-label={playingKey === itemKey(it) ? '停止' : '试听'}
+                            onClick={() => togglePreview(it)}
+                          >
                             {playingKey === itemKey(it) ? (
                               <MdStop fontSize="small" />
                             ) : (

@@ -45,6 +45,11 @@ const (
 	maxMusicKeywordRunes = 100
 	maxMusicItems        = 200 // 单次提交下载上限（与助手侧一致）
 	maxMusicBodyBytes    = 1 << 20
+
+	// 试听取直链的重试参数：上游取链是**间歇性**的（实测同一首歌连测 8 次会偶发 1 次 404，
+	// 平台侧风控/接口抖动），只试一次会把偶发失败直接抛给用户，故做少量重试 + 线性退避。
+	musicPreviewAttempts = 3
+	musicPreviewBackoff  = 400 * time.Millisecond
 )
 
 // addMusicSearchRoute 注册「在线搜索」相关路由。
@@ -522,18 +527,53 @@ func handleMusicPreview(client *baidusync.Client) http.HandlerFunc {
 		// 试听是流式传输，给足超时
 		reqCtx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		defer cancel()
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			writeMusicError(w, r.Context(), err)
-			return
+
+		// 上游取直链存在间歇性失败（见 musicPreviewAttempts 注释），因此对
+		// 「尚未开始传输字节」的失败做有限次重试；一旦拿到 200/206 立即结束重试。
+		var (
+			resp    *http.Response
+			lastErr error
+		)
+		// 注意：不能叫 client —— 本函数的入参 client 是助手客户端，同名会遮蔽
+		httpc := &http.Client{}
+		for attempt := 1; attempt <= musicPreviewAttempts; attempt++ {
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+			if err != nil {
+				writeMusicError(w, r.Context(), err)
+				return
+			}
+			// 透传 Range，使播放器可以拖动进度
+			if rng := r.Header.Get("Range"); rng != "" {
+				req.Header.Set("Range", rng)
+			}
+			resp, lastErr = httpc.Do(req)
+			if lastErr == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+				break
+			}
+			// 循环内不能 defer（会累积到函数返回才关闭）→ 显式关闭并置空
+			if resp != nil {
+				_ = resp.Body.Close()
+				resp = nil
+			}
+			if attempt == musicPreviewAttempts {
+				break
+			}
+			// 退避等待；等待期间客户端断开则立即返回，避免无谓占用
+			select {
+			case <-time.After(time.Duration(attempt) * musicPreviewBackoff):
+			case <-reqCtx.Done():
+				writeMusicError(w, r.Context(), reqCtx.Err())
+				return
+			}
 		}
-		// 透传 Range，使播放器可以拖动进度
-		if rng := r.Header.Get("Range"); rng != "" {
-			req.Header.Set("Range", rng)
-		}
-		resp, err := (&http.Client{}).Do(req)
-		if err != nil {
-			writeMusicError(w, r.Context(), err)
+		if resp == nil {
+			// 全是网络层错误：保留原始错误便于排查；否则是上游连续返回异常状态码
+			if lastErr != nil {
+				writeMusicError(w, r.Context(), lastErr)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{
+				"error": fmt.Sprintf("音源不可用（上游连续 %d 次均返回异常，可能是版权限制或无可用音源）", musicPreviewAttempts)})
 			return
 		}
 		defer resp.Body.Close()
