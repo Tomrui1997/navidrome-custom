@@ -9,7 +9,7 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 源码目录 | `e:\Navidrome`（Go 后端 + React 前端 `ui/`） |
+| 源码目录 | `e:\xr\Navidrome`（Go 后端 + React 前端 `ui/`） |
 | 基线版本 | 上游 tag `v0.64.2`（提交 `10114574`）；本地为自建分支，改动未合并上游 |
 | 后端 | Go（`go.mod` 要求 1.27，`GOTOOLCHAIN=auto` 自动拉取）；SQLite（**CGO 必需**） |
 | 前端 | React + react-admin v3 + MUI v4（`ui/`，npm） |
@@ -32,16 +32,16 @@
 
 ```powershell
 # 1) 助手（含单测，本机 Windows 可跑）
-cd e:\Navidrome
+cd e:\xr\Navidrome
 go vet ./tools/nd-helper/... ; go test ./tools/nd-helper/... ; gofmt -l tools\nd-helper
 # 注意：跨平台编译后再跑测试前要清掉 GOOS/GOARCH：Remove-Item Env:GOOS,Env:GOARCH,Env:CGO_ENABLED
 
 # 2) 一键构建 + 部署（内部：前端构建 → zig 交叉编译 → 助手构建 → scp → 远端校验哈希 → 安装 → 重启 → 探活）
-powershell -ExecutionPolicy Bypass -File e:\navidrome-deploy\90-build-deploy.ps1 -Target test
+powershell -ExecutionPolicy Bypass -File e:\xr\navidrome-deploy\90-build-deploy.ps1 -Target test
 ```
 
 - 交叉编译参数：`GOOS=linux GOARCH=amd64 CGO_ENABLED=1`、`CC="E:\tools\zig-x86_64-windows-0.15.2\zig.exe cc -target x86_64-linux-gnu.2.28"`、tags `netgo,sqlite_fts5`
-- 远端脚本 `e:\navidrome-deploy\deploy-remote.sh` **幂等**（校验哈希→备份一次→安装→重启→状态），中断后可安全重跑
+- 远端脚本 `e:\xr\navidrome-deploy\deploy-remote.sh` **幂等**（校验哈希→备份一次→安装→重启→状态），中断后可安全重跑
 - 生产：`… -Target prod -SkipBuild`（复用已构建产物），**仅在用户通知后执行**
 
 ## 四、本机环境坑（务必遵守，避免反复踩）
@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File e:\navidrome-deploy\90-build-deploy.ps1
 
 ### 本仓库每次改代码的最低要求
 
-1. **先方案后编码**：新模块/复杂功能先出技术方案（`docs/` 或 `e:\navidrome-deploy\design\`），评审通过再写码
+1. **先方案后编码**：新模块/复杂功能先出技术方案（`docs/` 或 `e:\xr\navidrome-deploy\design\`），评审通过再写码
 2. **命名与结构**：函数 ≤ 50 行、嵌套 ≤ 3 层；`handler → helper/client` 单向调用
 3. **安全编码**：外部输入必校验；路径必须做白名单/包含性校验（`ensureWithin`）；特权操作走 root 助手，Web 进程不接触凭据
 4. **日志**：用 `log.Printf` 带前缀；**日志按天分文件**（`/var/log/baidusync/YYYY-MM-DD.log`），过滤无意义噪音，保留 7 天
@@ -92,4 +92,4 @@ powershell -ExecutionPolicy Bypass -File e:\navidrome-deploy\90-build-deploy.ps1
 - 同步前**预检远端目录**（`baidupcs ls` 可列出且非空），结束后**扫描本轮日志**判成败：杜绝「数据总量 0B + 退出码 0」的假成功
 - 进度只统计**本次运行**并按文件去重（历史实现累加整份日志，数字严重失真）
 - 删除走**软删**（本地 `trash/`、网盘 `/_deleted/`，可恢复）；配置开启软删时硬删请求会被强制改回
-- 测试机无 IPv6 出口：需 `/etc/hosts` 固定百度域名为 IPv4 + 内核禁用 IPv6（见 `e:\navidrome-deploy\97-pin-ipv4.sh`）
+- 测试机无 IPv6 出口：需 `/etc/hosts` 固定百度域名为 IPv4 + 内核禁用 IPv6（见 `e:\xr\navidrome-deploy\97-pin-ipv4.sh`）

@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 版本 | v1.0（基线锁定 2026-09-27） |
-| 关联技术方案 | `e:\navidrome-deploy\design\BaiduSync-tech-design.md` |
+| 关联技术方案 | `e:\xr\navidrome-deploy\design\BaiduSync-tech-design.md` |
 | 需求提出人 | 用户（Navidrome 自建分支维护者） |
 | 实现范围 | Navidrome 后端 + 前端 + root 助手（`tools/nd-helper`） |
 | 状态 | 已实现并在测试环境验证；生产部署待通知 |

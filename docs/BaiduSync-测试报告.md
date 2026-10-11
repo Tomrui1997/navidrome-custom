@@ -78,7 +78,7 @@
 | 任务状态 | `/opt/navidrome/.baidusync-state.json` |
 | 回收站索引 | `/opt/navidrome/trash/index.json` |
 | 配置与备份 | `/opt/navidrome/baidusync.json`、`/root/baidusync.json.bak*` |
-| 部署与回滚 | `e:\navidrome-deploy\90-build-deploy.ps1`、`deploy-remote.sh`、官方二进制备份 `/opt/navidrome/navidrome.official-0.64.2.bak` |
+| 部署与回滚 | `e:\xr\navidrome-deploy\90-build-deploy.ps1`、`deploy-remote.sh`、官方二进制备份 `/opt/navidrome/navidrome.official-0.64.2.bak` |
 
 ## 六、未覆盖项与风险
 
