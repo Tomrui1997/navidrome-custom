@@ -41,6 +41,7 @@ powershell -ExecutionPolicy Bypass -File e:\xr\navidrome-deploy\90-build-deploy.
 ```
 
 - 交叉编译参数：`GOOS=linux GOARCH=amd64 CGO_ENABLED=1`、`CC="E:\tools\zig-x86_64-windows-0.15.2\zig.exe cc -target x86_64-linux-gnu.2.28"`、tags `netgo,sqlite_fts5`
+- **本机无 zig 时**（`E:\tools\zig-*` 不存在即为此情况）：改用 `powershell -File e:\xr\navidrome-deploy\89-build-on-test.ps1 -Target test` —— 打包源码上传测试机，用测试机自带 Go+gcc 原生编译（`/root/navidrome` + `/root/nd-helper`），再走同一个 `deploy-remote.sh` 安装/重启/探活
 - 远端脚本 `e:\xr\navidrome-deploy\deploy-remote.sh` **幂等**（校验哈希→备份一次→安装→重启→状态），中断后可安全重跑
 - 生产：`… -Target prod -SkipBuild`（复用已构建产物），**仅在用户通知后执行**
 
