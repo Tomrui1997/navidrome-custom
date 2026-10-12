@@ -136,7 +136,7 @@ the `master` branch in order to get a stable set of binaries.
 - **下载后自动备份到网盘（防丢失）**：每次下载任务完成后，自动把本轮的**音频/歌词/封面**上传到
   `网盘音乐目录/在线音乐/{艺人}/…`（与本地目录一一对应）；同名文件自动跳过（幂等）；默认开启；
   本地文件丢失时，可用「同步」功能将网盘备份**原样拉回**
-- 变更细节详见 [`CHANGELOG.md`](CHANGELOG.md) 第 20、21 条
+- 变更细节详见 [`CHANGELOG.md`](CHANGELOG.md) 第 25、26 条
 
 ---
 
