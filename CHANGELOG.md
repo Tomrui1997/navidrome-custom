@@ -476,6 +476,52 @@
   1. 后续清理重复请用「重复歌曲」功能（见第 18 条）—— 库记录 + 本地 + 网盘**三处同清**，不会留幽灵记录
   2. 已把删除流程中「网盘源文件不存在」由 `failed` 改判为 `skipped`，避免连带阻塞库记录删除
 
+## 2026年10月12日 更新
+
+### 20. 修复：在线下载歌曲在客户端（音流等）不显示歌词
+
+#### 20.1 现象与根因（生产实测）
+
+- **现象**：用户「音流（Musiver）」App 播放**在线搜索下载**的歌曲（如《阿杜 - Andy》）时，歌词页空白；
+  而**网盘同步**进来的歌曲歌词显示正常。
+- **根因**：
+  1. Navidrome（本版本）与音流等客户端读取的是**库内 `lyrics` 字段**（`/api/song` 响应），
+     该字段只来自**文件内嵌歌词**；磁盘上的 `.lrc` 侧车文件**不会被采用**（请求时的 sidecar 读取只服务
+     Subsonic `getLyricsBySongId` 接口，音流不走该接口）。
+  2. 在线下载的音频是纯流媒体（无内嵌歌词）；网盘歌的文件**自带内嵌歌词**（此前已确认 169/170 首有）。
+     → 库内对比：在线音乐 15 首 `lyrics` 全空；网盘歌 169 首全有。
+- **附**：磁盘上 `.lrc` 实际都已下载（14/15 首存在），此前误判为「歌词没下载」。
+
+#### 20.2 修复（nd-helper 下载流程）
+
+- `tools/nd-helper/download.go`：
+  - 下载流程重排为 **音频 → 歌词 → 标签/歌词一次写入**（减少一次文件重写）；
+  - 新增 `lyricMetadataArgs`：**MP3 写 TXXX「lyrics:xxx」**（带语言码），**FLAC/OGG/M4A 等写「LYRICS」键**
+    —— 键名由生产实测锁定（Navidrome 的 TagLib 读取器只认这些形态，见验证方式）；
+  - `tagAudioFile` 支持写入内嵌歌词（`-c copy` 无损，失败不影响音频/下载结果）；
+  - `fetchLyric` 返回歌词文本；音频已存在且缺内嵌歌词时**自动补写**（读取已有 `.lrc`）；
+  - `audioHasTags` 升级为 `probeAudioTags`（同时探测 title/artist 与歌词标签；`lyricist` 不误判）。
+- 新增单测：`TestLyricMetadataArgs`、`TestParseAudioTagState`（含各键名形态与误判防护）。
+
+#### 20.3 存量修复（生产已执行）
+
+- 一次性脚本（`embed_lyrics_existing.py`，以 navidrome 用户运行）：给「在线音乐」目录 14 首已有 `.lrc`
+  的歌补写内嵌歌词，全部成功、0 失败；
+  《周传雄 - 侧脸》无 `.lrc`（该曲在音乐平台已下架，kugou 404），保持无歌词。
+- 扫描后库内验证：**在线音乐 14/15 首 `lyrics` 非空**（1456~5143 字节的完整 LRC JSON）。
+
+### 验证方式
+
+- **键名实验（生产，Navidrome `inspect` 直读）**：ffmpeg 写 `lyrics:xxx`（MP3）/`LYRICS`（FLAC/OGG/M4A）
+  → Navidrome 映射结果 `lyrics:xxx` 且 `mapped.lyrics` 为完整歌词 JSON；对照组（转义键、无语言码 USLT）
+  全部读不到 —— 键名选择有据。
+- **单测**：`go test ./tools/nd-helper/...` 通过（含新增 2 组用例）；`go vet` 0 问题。
+- **部署**：新二进制 SHA256 `877e9d11…584a`，scp 校验一致后安装、重启 `nd-helper`，服务 active；
+  旧版备份 `/usr/local/bin/nd-helper.bak.20261012101149`（回滚命令已留档）。
+- **生产端到端**：14 首补写 → 定向扫描（selective）+ 全量扫描（1.59s）→ 库内 `lyrics` 非空 14/15；
+  《阿杜 - Andy》1805 字节歌词 JSON 入库（音流播放页可直接验证）。
+- **无副作用检查**：实验残留（`_lrc-test` 4 首）目录+库记录已清理，album「天黑」song_count 复测为 1。
+
 
 
 

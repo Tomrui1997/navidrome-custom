@@ -350,41 +350,92 @@ func lookBin(name string) string {
 	return ""
 }
 
-// audioHasTags 判断文件是否已带可用的 title+artist 标签（ffprobe）。
-// 判断不了时返回 false：宁可多写一次标签（幂等），也不要漏写。
-func audioHasTags(ctx context.Context, path string) bool {
+// audioTagState 音频文件的标签现状（供下载流程决定是否需要（重）写标签）。
+type audioTagState struct {
+	hasTitleArtist bool // title 与 artist 是否齐全
+	hasLyrics      bool // 是否已有内嵌歌词（任意歌词键且内容非空）
+}
+
+// probeAudioTags 用 ffprobe 探测标签现状；探测失败返回零值（全 false）：
+// 宁可多写一次标签（幂等），也不要漏写。
+func probeAudioTags(ctx context.Context, path string) audioTagState {
 	probe := ffprobeBin()
 	if probe == "" {
-		return false
+		return audioTagState{}
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, probe, "-v", "quiet",
 		"-show_entries", "format_tags", "-of", "json", path).Output()
 	if err != nil {
-		return false
+		return audioTagState{}
 	}
+	return parseAudioTagState(out)
+}
+
+// parseAudioTagState 解析 ffprobe 的 format_tags JSON（纯函数，便于单测）。
+// 歌词键名各容器不一：MP3（TXXX）为 lyrics / lyrics:xxx / lyrics-eng，
+// FLAC/OGG（Vorbis）为 LYRICS，M4A（iTunes）为 ©lyr（ffprobe 显示 lyrics）。
+func parseAudioTagState(raw []byte) audioTagState {
 	var res struct {
 		Format struct {
 			Tags map[string]string `json:"tags"`
 		} `json:"format"`
 	}
-	if json.Unmarshal(out, &res) != nil {
-		return false
+	if json.Unmarshal(raw, &res) != nil {
+		return audioTagState{}
 	}
-	tags := map[string]string{}
+	state := audioTagState{}
+	title, artist := "", ""
 	for k, v := range res.Format.Tags {
-		tags[strings.ToLower(k)] = v
+		lk := strings.ToLower(k)
+		switch {
+		case lk == "title":
+			title = v
+		case lk == "artist":
+			artist = v
+		}
+		if isLyricTagKey(lk) && strings.TrimSpace(v) != "" {
+			state.hasLyrics = true
+		}
 	}
-	return strings.TrimSpace(tags["title"]) != "" && strings.TrimSpace(tags["artist"]) != ""
+	state.hasTitleArtist = strings.TrimSpace(title) != "" && strings.TrimSpace(artist) != ""
+	return state
 }
 
-// tagAudioFile 用 ffmpeg 把歌手/歌名/专辑写入音频标签（best-effort）。
+// isLyricTagKey 判断 ffprobe 标签键是否为歌词（覆盖实测到的各种形态）。
+// 注意不能用「包含 lyric」判定——lyricist（作词人）是另一个字段，会被误判。
+func isLyricTagKey(lk string) bool {
+	return lk == "lyrics" || lk == "unsynced_lyrics" || lk == "unsyncedlyrics" ||
+		strings.HasPrefix(lk, "lyrics:") || strings.HasPrefix(lk, "lyrics-")
+}
+
+// lyricMetadataArgs 构造写入内嵌歌词的 ffmpeg -metadata 参数。
+//
+// 键名由生产实测锁定（Navidrome 的 TagLib 读取器只认这些形态）：
+//   - MP3：TXXX「lyrics:xxx」（带语言码，TagLib 解析为 lyrics:xxx 键）；
+//   - FLAC/OGG/M4A 等：Vorbis/iTunes 的「LYRICS」键。
+//
+// 为什么必须写内嵌歌词：Navidrome（本版本）与音流等客户端读取的是库内 lyrics 字段，
+// 该字段仅来自文件内嵌歌词——磁盘上的 .lrc 侧车文件不会被采用（生产实测确认）。
+func lyricMetadataArgs(ext, lyricText string) []string {
+	if strings.TrimSpace(lyricText) == "" {
+		return nil
+	}
+	if ext == ".mp3" {
+		return []string{"-metadata", "lyrics:xxx=" + lyricText}
+	}
+	return []string{"-metadata", "LYRICS=" + lyricText}
+}
+
+// tagAudioFile 用 ffmpeg 把歌手/歌名/专辑与歌词写入音频标签（best-effort）。
 //
 // 为什么需要：平台返回的音频常常没有任何 ID3/Vorbis 标签，Navidrome 只能拿到标题（文件名），
 // 歌手/专辑全部缺失 → 按歌手/专辑浏览与搜索都找不到。写入后即可正常检索。
+// writeMeta 控制 title/artist/album 是否写入（对应 TagMetadata 开关）；
+// lyricText 非空时写入内嵌歌词（独立于 writeMeta——勾选了歌词就应能显示出来）。
 // 实现要点：先写临时文件再 rename，失败时原文件完好。
-func tagAudioFile(ctx context.Context, path string, item DownloadItem, lg func(string, ...any)) error {
+func tagAudioFile(ctx context.Context, path string, item DownloadItem, lyricText string, writeMeta bool, lg func(string, ...any)) error {
 	bin := ffmpegBin()
 	if bin == "" {
 		return errors.New("未找到 ffmpeg")
@@ -393,12 +444,17 @@ func tagAudioFile(ctx context.Context, path string, item DownloadItem, lg func(s
 	tmp := path + ".tagtmp" + ext
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", path,
 		"-c", "copy", "-map", "0:a:0",
-		"-metadata", "title=" + item.Name,
-		"-metadata", "artist=" + item.Artist,
 	}
-	if strings.TrimSpace(item.Album) != "" {
-		args = append(args, "-metadata", "album="+item.Album)
+	if writeMeta {
+		args = append(args,
+			"-metadata", "title="+item.Name,
+			"-metadata", "artist="+item.Artist,
+		)
+		if strings.TrimSpace(item.Album) != "" {
+			args = append(args, "-metadata", "album="+item.Album)
+		}
 	}
+	args = append(args, lyricMetadataArgs(ext, lyricText)...)
 	if ext == ".mp3" {
 		// ID3v2.3 兼容性最好（部分老播放器/车机不认 2.4）
 		args = append(args, "-id3v2_version", "3")
@@ -647,31 +703,47 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 		}
 	}
 
-	// 2.1) 校正扩展名（平台声明的 ext 可能与实际内容不符）+ 补写元数据标签。
-	// 不做这两步的后果（真实缺陷）：文件被错误命名后 Navidrome 解析失败，
+	// 2.1) 校正扩展名（平台声明的 ext 可能与实际内容不符）。
+	// 不做这步的后果（真实缺陷）：文件被错误命名后 Navidrome 解析失败，
 	// 标题退化成文件名、歌手/专辑变 [Unknown Artist]/[Unknown Album] → 按歌手搜不到。
 	if containsTypes(types, "audio") {
 		if st, statErr := os.Stat(audioPath); statErr == nil && st.Size() > 0 {
 			audioPath, ext = fixAudioExt(audioPath, ext, lg)
-			// 刚下载的必写；已存在的仅在缺少标签时补写（避免每次重下都重写文件）
-			if cfg.TagMetadata && (downloaded || !audioHasTags(ctx, audioPath)) {
-				if err := tagAudioFile(ctx, audioPath, item, lg); err != nil {
-					lg("元数据写入跳过: %s（%v）", filepath.Base(audioPath), err)
-				}
-			}
 		}
 	}
 
-	// 3) 歌词：同名 .lrc（Navidrome 会自动读取同目录同名歌词）
+	// 2.2) 歌词：下载/读取同名 .lrc，并拿到歌词文本（下一步写入内嵌标签）。
+	// 顺序调整原因：内嵌歌词要与元数据在同一次 ffmpeg 调用中写入，减少一次文件重写。
+	lyricText := ""
 	if containsTypes(types, "lyric") {
 		lrcPath := strings.TrimSuffix(audioPath, ext) + ".lrc"
 		if st, statErr := os.Stat(lrcPath); statErr == nil && st.Size() > 0 && !cfg.DownloadOverwrite {
+			// 已存在：读取内容，供「文件缺内嵌歌词时补写」使用（如历史下载的文件）
+			if b, rerr := os.ReadFile(lrcPath); rerr == nil {
+				lyricText = strings.TrimPrefix(string(b), "\ufeff")
+			}
 			lg("歌词已存在，跳过: %s", lrcPath)
-		} else if err := s.fetchLyric(ctx, client, cfg, item, lrcPath); err != nil {
+		} else if text, err := s.fetchLyric(ctx, client, cfg, item, lrcPath); err != nil {
 			// 歌词失败不算整首失败（很多老歌本来就没有歌词）
 			lg("歌词未获取: %s - %s (%v)", item.Artist, item.Name, err)
 		} else {
+			lyricText = text
 			lg("歌词完成: %s", lrcPath)
+		}
+	}
+
+	// 2.3) 写入音频标签：歌手/歌名/专辑（可选）+ 内嵌歌词（有歌词就写）。
+	// 为什么歌词必须写内嵌：Navidrome 与音流等客户端读取的是库内 lyrics 字段，
+	// 而该字段只来自文件内嵌歌词（.lrc 侧车不会被采用）——不写则歌词永远不显示。
+	// 写入条件：刚下载、缺 title/artist、或有歌词但文件还没有内嵌歌词（补写场景）。
+	if st, statErr := os.Stat(audioPath); statErr == nil && st.Size() > 0 {
+		state := probeAudioTags(ctx, audioPath)
+		needMeta := cfg.TagMetadata && (downloaded || !state.hasTitleArtist)
+		needLyric := lyricText != "" && !state.hasLyrics
+		if needMeta || needLyric {
+			if err := tagAudioFile(ctx, audioPath, item, lyricText, cfg.TagMetadata, lg); err != nil {
+				lg("元数据写入跳过: %s（%v）", filepath.Base(audioPath), err)
+			}
 		}
 	}
 
@@ -845,8 +917,9 @@ func (s *Server) apiDataGet(ctx context.Context, client *http.Client, cfg Config
 	return json.Unmarshal(wrapper.Data, out)
 }
 
-// fetchLyric 拉取歌词并写入 .lrc（空歌词视为失败，不落文件）。
-func (s *Server) fetchLyric(ctx context.Context, client *http.Client, cfg Config, item DownloadItem, dst string) error {
+// fetchLyric 拉取歌词：写入 .lrc（空歌词视为失败，不落文件），并返回歌词文本
+// （供 downloadOne 写入音频内嵌标签）。
+func (s *Server) fetchLyric(ctx context.Context, client *http.Client, cfg Config, item DownloadItem, dst string) (string, error) {
 	q := url.Values{}
 	q.Set("id", item.ID)
 	q.Set("source", item.Source)
@@ -854,17 +927,17 @@ func (s *Server) fetchLyric(ctx context.Context, client *http.Client, cfg Config
 		Lyric string `json:"lyric"`
 	}
 	if err := s.apiDataGet(ctx, client, cfg, "/api/v1/music/lyric", q, &data); err != nil {
-		return err
+		return "", err
 	}
 	text := strings.TrimSpace(data.Lyric)
 	if text == "" || text == "No lyrics found" {
-		return errors.New("无歌词")
+		return "", errors.New("无歌词")
 	}
 	if err := os.WriteFile(dst, []byte(text), 0o644); err != nil {
-		return err
+		return "", err
 	}
 	chownToNavidrome(dst)
-	return nil
+	return text, nil
 }
 
 // fetchCover 通过 go-music-api 的封面代理下载图片。

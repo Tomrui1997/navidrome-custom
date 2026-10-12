@@ -378,3 +378,65 @@ func TestFixAudioExtRenamesMislabeledFile(t *testing.T) {
 		t.Error("正确命名的文件内容被破坏")
 	}
 }
+
+// 内嵌歌词参数：MP3 必须用带语言码的 TXXX 键（lyrics:xxx），
+// 其余容器用 LYRICS；空歌词不产生任何参数。
+// 键名由生产实测锁定（Navidrome 的 TagLib 读取器只认这些形态）。
+func TestLyricMetadataArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		ext  string
+		text string
+		want []string
+	}{
+		{"mp3 用 lyrics:xxx 键", ".mp3", "[00:01.00]abc", []string{"-metadata", "lyrics:xxx=[00:01.00]abc"}},
+		{"flac 用 LYRICS 键", ".flac", "[00:01.00]abc", []string{"-metadata", "LYRICS=[00:01.00]abc"}},
+		{"ogg 用 LYRICS 键", ".ogg", "abc", []string{"-metadata", "LYRICS=abc"}},
+		{"m4a 用 LYRICS 键", ".m4a", "abc", []string{"-metadata", "LYRICS=abc"}},
+		{"空歌词不添加参数", ".mp3", "", nil},
+		{"纯空白歌词不添加参数", ".flac", "  \n\t ", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := lyricMetadataArgs(c.ext, c.text)
+			if len(got) != len(c.want) {
+				t.Fatalf("参数数量不符: got=%v want=%v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("参数[%d] = %q, 期望 %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// 标签探测解析：歌词键名各容器不一（lyrics / lyrics:xxx / lyrics-eng / LYRICS），
+// 必须都能识别；lyricist（作词人）是另一字段，不能误判为歌词。
+func TestParseAudioTagState(t *testing.T) {
+	cases := []struct {
+		name       string
+		raw        string
+		wantMeta   bool
+		wantLyrics bool
+	}{
+		{"齐全+lyrics:eng", `{"format":{"tags":{"title":"T","artist":"A","lyrics:eng":"x"}}}`, true, true},
+		{"齐全+lyrics-eng", `{"format":{"tags":{"title":"T","artist":"A","lyrics-eng":"x"}}}`, true, true},
+		{"齐全+LYRICS", `{"format":{"tags":{"title":"T","artist":"A","LYRICS":"x"}}}`, true, true},
+		{"齐全+unsynced_lyrics", `{"format":{"tags":{"title":"T","artist":"A","unsynced_lyrics":"x"}}}`, true, true},
+		{"无歌词", `{"format":{"tags":{"title":"T","artist":"A"}}}`, true, false},
+		{"lyricist 不算歌词", `{"format":{"tags":{"title":"T","artist":"A","lyricist":"W"}}}`, true, false},
+		{"缺 artist", `{"format":{"tags":{"title":"T"}}}`, false, false},
+		{"空对象", `{}`, false, false},
+		{"非法 JSON", `not-json`, false, false},
+		{"歌词为空串不算", `{"format":{"tags":{"title":"T","artist":"A","lyrics":""}}}`, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseAudioTagState([]byte(c.raw))
+			if got.hasTitleArtist != c.wantMeta || got.hasLyrics != c.wantLyrics {
+				t.Errorf("parseAudioTagState(%s) = %+v, 期望 meta=%v lyrics=%v", c.raw, got, c.wantMeta, c.wantLyrics)
+			}
+		})
+	}
+}
