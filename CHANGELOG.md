@@ -476,9 +476,100 @@
   1. 后续清理重复请用「重复歌曲」功能（见第 18 条）—— 库记录 + 本地 + 网盘**三处同清**，不会留幽灵记录
   2. 已把删除流程中「网盘源文件不存在」由 `failed` 改判为 `skipped`，避免连带阻塞库记录删除
 
+## 2026年10月6日 更新
+
+### 20. 修复「试听失败只提示 no supported source」并支持同名跨平台自动降级
+
+- **现象**：点「试听」提示 `试听失败：Failed to load because no supported source was found.`，
+  无法判断到底是版权限制、平台风控、试听开关未开还是登录过期
+- **定位（结论：音源侧限制，不是本系统缺陷）**：生产 nginx 日志中 166 次试听请求
+  **全部**带 `/music` 子路径前缀（说明此前的 `baseUrl()` 修复仍有效，不是旧问题复发）；
+  按平台分组统计：酷我 55 / 咪咕 30 / 网易云 10 次**全部 206 正常**，
+  QQ 24 次 502、酷狗 16 次 502；直连上游复现，QQ/酷狗均返回 `404 Failed to get URL`
+- **根因细分（在生产机用真实 Cookie 逐首复测）**：
+  1. **QQ 链路本身可用**：同一账号（VIP、Cookie 有效）连续 8 轮取链 **16/16 成功**；
+     线上失败的那些具体歌曲逐首复测均为 `no valid download url found or vip required`
+     → 即**这些歌曲在 QQ 侧没有下发直链**（版权/付费限制），与服务器 IP 无关
+  2. **酷狗当前不可用**：免费 songinfo 接口已不下发直链（`errcode=0` 但 URL 为空，
+     原始响应 `fail_process=12`）；库中更完整的 v2 接口明确要求登录态
+     （`requires cookie t and KugooID`），而当前酷狗凭据长度仅 288 且 `isVip=false`
+     → 需在页面**重新扫码登录酷狗**，且账号需具备对应权限
+  3. 另有 5 次 401 = 页面久置导致 JWT 过期
+- **改动**：
+  1. `ui/src/musicsearch/api.js` 新增 `previewUrl` / `probePreview` / `previewErrorMessage`：
+     播放前先 `fetch` 带 `Range: bytes=0-0` 预检 1 字节（拿到响应头即 `body.cancel()` 丢弃，
+     不会把整首歌拉下来），把后端 `error` 原文提示用户
+     （如「音源不可用（上游返回 404，可能是版权限制或无可用音源）。可切换其它平台重试」）；
+     401 归一为「登录已过期，请重新登录或刷新页面后重试」
+  2. `ui/src/musicsearch/Search.jsx` 试听时**自动降级到同名其它平台**（最多 3 个）：
+     搜索结果按平台各返回一份，某平台无音源时自动改试其它平台并提示「已自动切换 XX 播放」
+  3. 顺带把 `Search.jsx` 中一处全角空格字面量改为 `\u3000` 转义，消除 ESLint `no-irregular-whitespace`
+- **验证**：新增 `ui/src/musicsearch/api.test.js` 11 个用例（baseURL 前缀、预检并取消响应体、
+  非 JSON 响应、401/502 文案、空入参）**全部通过**；`npm run lint` **0 问题**；`npm run build` 成功
+
+### 21. 修复两处遗留的单测问题（AppBar mock 缺失 / i18n 动态导入超时）
+
+- **问题 1**：`ui/src/layout/AppBar.test.jsx` 4 个用例报
+  `No "MenuItemLink" export is defined on the "react-admin" mock` —— 自建 `SyncMenu`/`SearchMenu`
+  引入后遗留的回归，测试 mock 未同步补齐
+  - **改动**：为 `react-admin` mock 补上 `MenuItemLink`（`React.forwardRef` + 具名函数，
+    避免传 `ref` 告警与 ESLint `react/display-name`）
+- **问题 2**：`ui/src/i18n/provider.test.js` 全量并发跑时超默认 5s（该用例动态导入整个 i18n provider，
+  单跑约 2.7s，机器忙时 >5s）→ 显式给 15s 超时，避免把「机器忙」误报成失败
+- **验证**：`npx vitest run src/layout/AppBar.test.jsx` 4/4 通过；
+  **全量 `npx vitest run` → 88 个测试文件 / 774 个用例全部通过**
+
+### 22. 试听代理增加有限重试（消除上游取直链的间歇性失败）
+
+- **背景（实测数据）**：上游取直链是**间歇性**的 —— 同一首歌连测 8 次，上游直连出现 **3 次 404**
+  （失败率约 37%），经 Navidrome 转发也会偶发 502；这类偶发失败此前会**直接抛给用户**
+- **改动**：`server/nativeapi/musicsearch.go` 的 `handleMusicPreview` 对上游非 2xx / 网络错误做
+  **最多 3 次尝试 + 线性退避**（400ms / 800ms）；仅在「尚未开始传输字节」时重试，
+  拿到 200/206 立即结束；循环内**显式 Close 响应体**（不用 defer，避免累积到函数返回）；
+  连续失败时文案为「上游连续 3 次均返回异常」，与「确有版权的歌曲」区分开
+- **验证（测试环境，部署后）**：
+  - 经 Navidrome 连测 **20/20 全部 206**（改动前 8 次里会失败 1 次）
+  - 上游直连对照仍偶发 404 → 证明重试确实在兜底（部分请求耗时 0.5s / 1.37s 即重试后成功）
+  - 酷狗无音源歌曲稳定返回「音源不可用（上游连续 3 次均返回异常，可能是版权限制或无可用音源）」
+  - 未带认证仍为 401 JSON；`enablePreview=false` 时仍为 403 文案
+- **配套**：`Search.jsx` 为行内「下载 / 试听」图标按钮补 `aria-label`（无障碍 + 可测试）；
+  新增组件级测试 `ui/src/musicsearch/Search.preview.test.jsx`（2 用例：
+  首条平台无音源时自动切换同名其它平台播放、全部无音源时提示后端真实原因）
+
+### 23. 在线搜索默认平台去掉酷狗（平台侧不再下发直链）
+
+- **背景（生产实测结论）**：酷狗已不对免登录/网页扫码登录态下发播放直链 ——
+  免费 `songinfo` 返回 `errcode=0` 但 URL 为空（原始响应 `fail_process=12`）；
+  带权限的接口 `wwwapi.kugou.com/play/songinfo` 要求 **App 端字段 `t` / `KugooID`**，
+  而库的酷狗扫码登录只写入 `token`/`userid`/设备字段（实测 `isVip=false`、7 个字段、288 字节），
+  因此用户按默认勾选搜索时会频繁撞到「无可用音源」
+- **改动**：`ui/src/musicsearch/Search.jsx` 默认勾选平台由 `网易云 / 酷狗 / 酷我 / 咪咕`
+  改为 **`网易云 / 酷我 / 咪咕`**；酷狗仍保留在平台列表里可**手动勾选**（不删除能力）
+- **验证**：新增用例断言默认 `sources=netease,kuwo,migu`（`Search.preview.test.jsx` **3/3 通过**）；
+  `npx vitest run src/musicsearch` **14/14 通过**；`npm run lint` **0 问题**；`npm run build` 成功
+
+### 24. 酷狗登录改为「链接登录」（不再渲染二维码）
+
+- **背景**：酷狗 App 对网页二维码支持不佳（扫码后无法完成确认）；
+  原始做法是「展示登录链接 + 在手机浏览器打开」
+- **改动**：
+  1. `ui/src/musicsearch/LoginDialog.jsx`：平台项加 `linkOnly` 标记（酷狗只走链接登录）——
+     该平台**不渲染二维码**，改为「提示 + 链接 + 复制链接 + 打开链接」；
+     按钮文案随平台切换为「获取登录链接」（其它平台仍为「获取二维码」）
+  2. i18n 新增 `getLink` / `openInPhoneBrowser` 两个键（`resources/i18n/zh-Hans.json` 与
+     `ui/src/i18n/en.json` **同步新增**，键位对等 16/16）
+- **验证**：新增 `ui/src/musicsearch/LoginDialog.test.jsx` 2 用例（酷狗不出现二维码、
+  「打开链接」可点且用 `window.open` 打开；网易云仍渲染二维码不回归）→
+  `npx vitest run src/musicsearch` **16/16 通过**；`npx eslint src/musicsearch` 0 问题；
+  `npm run build` 成功；两个 i18n JSON 解析通过且键位对等
+
+> 本机环境坑（记录）：在 `ui/` 下先跑 `npm run build` 再跑 `vitest`，
+> 偶发收集期报错 `Cannot read properties of undefined (reading 'config')` ——
+> 删除 `ui/node_modules/.vite` 后即恢复，属 vite 缓存问题，与代码无关。
+
 ## 2026年10月12日 更新
 
-### 20. 修复：在线下载歌曲在客户端（音流等）不显示歌词
+### 25. 修复：在线下载歌曲在客户端（音流等）不显示歌词
 
 #### 20.1 现象与根因（生产实测）
 
@@ -522,7 +613,7 @@
   《阿杜 - Andy》1805 字节歌词 JSON 入库（音流播放页可直接验证）。
 - **无副作用检查**：实验残留（`_lrc-test` 4 首）目录+库记录已清理，album「天黑」song_count 复测为 1。
 
-### 21. 新增「下载完成后自动备份到网盘」（防丢失）
+### 26. 新增「下载完成后自动备份到网盘」（防丢失）
 
 #### 21.1 背景与设计（需求确认后开发）
 
@@ -567,8 +658,3 @@
   空文件跳过；代码审查 + 单测覆盖）。
 - **端到端（下载自动备份）**：新下载任务完成后自动执行备份并写入日志；用户下次下载新歌时可直接观察
   「开始备份到网盘 / 备份完成」日志。
-
-
-
-
-

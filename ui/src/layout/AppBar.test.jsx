@@ -14,6 +14,14 @@ vi.mock('react-admin', () => ({
   useTranslate: () => (x) => x,
   usePermissions: () => ({ permissions: 'admin' }),
   getResources: () => [],
+  // 自建的「同步」「在线搜索」菜单项使用 MenuItemLink；mock 缺它会直接渲染报错。
+  // 用 forwardRef + 具名函数，否则 SyncMenu/SearchMenu 传 ref 时 React 告警 / ESLint 报 display-name。
+  MenuItemLink: React.forwardRef(function MenuItemLinkStub(
+    { primaryText },
+    ref,
+  ) {
+    return <div ref={ref}>{primaryText}</div>
+  }),
 }))
 
 vi.mock('./NowPlayingPanel', () => ({
