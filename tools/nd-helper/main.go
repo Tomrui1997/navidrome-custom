@@ -98,6 +98,11 @@ type Config struct {
 	// 默认开启：很多平台返回的音频没有任何标签，Navidrome 只能拿到标题（文件名），
 	// 歌手/专辑全缺 → 按歌手/专辑浏览与搜索都找不到。
 	TagMetadata bool `json:"tagMetadata"`
+
+	// BackupToNetdisk 下载完成后是否自动备份到网盘（音频/歌词/封面），默认开启。
+	// 目标目录 = RemoteRoot + 本地下载目录名（如 /apps/Cloud Sync/music/在线音乐）。
+	// 页面暂未提供开关；如需关闭可手工改配置文件。
+	BackupToNetdisk bool `json:"backupToNetdisk"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -138,6 +143,8 @@ func DefaultConfig() Config {
 		DownloadOverwrite:   false,
 		DownloadTypes:       []string{"audio", "lyric", "cover"},
 		TagMetadata:         true,
+		// 下载完成后自动备份到网盘（防丢失）；同名文件由 baidupcs 跳过，幂等
+		BackupToNetdisk: true,
 	}
 }
 
@@ -413,7 +420,11 @@ func (s *Server) dispatch(req Request) (any, error) {
 		defer s.mu.Unlock()
 		return s.cfg, nil
 	case "config_set":
-		var cfg Config
+		// 用当前配置做基底解码：前端表单未包含的字段（如新增配置项）保留现值，
+		// 避免「保存一次表单把新功能悄悄关掉」（bool 零值陷阱——真实踩坑点）。
+		s.mu.Lock()
+		cfg := s.cfg
+		s.mu.Unlock()
 		if err := json.Unmarshal(req.Params, &cfg); err != nil {
 			return nil, fmt.Errorf("配置参数解析失败: %w", err)
 		}

@@ -76,6 +76,14 @@ type DownloadTask struct {
 	// failedItems 失败项的**原始条目**（id/source/name/artist…）。
 	// 只记文本的话页面既看不出「还剩多少首没下完」，也无法一键重试（真实反馈）。
 	failedItems []DownloadItem
+
+	// ------ 备份到网盘（防丢失）------
+	backupTargets []backupTarget // 本轮成功处理、待备份的文件（音频 + 可选歌词/封面）
+	backupTotal   int
+	backupDone    int
+	backupSkipped int
+	backupFailed  int
+	backupCurrent string
 }
 
 func (t *DownloadTask) setTotal(n int) {
@@ -99,6 +107,31 @@ func (t *DownloadTask) incDone() {
 func (t *DownloadTask) incSkipped() {
 	t.mu.Lock()
 	t.skipped++
+	t.mu.Unlock()
+}
+
+// ------ 备份到网盘：清单与进度（worker 并发调用，全部加锁）------
+
+// addBackupTarget 记录一首成功歌曲待备份的文件。
+func (t *DownloadTask) addBackupTarget(bt backupTarget) {
+	t.mu.Lock()
+	t.backupTargets = append(t.backupTargets, bt)
+	t.mu.Unlock()
+}
+
+// incBackupDone / incBackupSkip / incBackupFailed 按「文件」粒度累加备份计数。
+func (t *DownloadTask) incBackupDone() { t.mu.Lock(); t.backupDone++; t.mu.Unlock() }
+func (t *DownloadTask) incBackupSkip() { t.mu.Lock(); t.backupSkipped++; t.mu.Unlock() }
+func (t *DownloadTask) incBackupFailed() {
+	t.mu.Lock()
+	t.backupFailed++
+	t.mu.Unlock()
+}
+
+// setBackupCurrent 设置正在备份的文件名（供快照展示）。
+func (t *DownloadTask) setBackupCurrent(name string) {
+	t.mu.Lock()
+	t.backupCurrent = name
 	t.mu.Unlock()
 }
 
@@ -144,6 +177,14 @@ func (t *DownloadTask) snapshot() map[string]any {
 		"errors":    t.errs,
 		// 失败项原始条目：前端据此显示「未完成数量」并提供一键重试
 		"failedItems": t.failedItems,
+		// 备份到网盘的进度（文件粒度；日志与排查用，前端未展示）
+		"backup": map[string]any{
+			"total":   t.backupTotal,
+			"done":    t.backupDone,
+			"skipped": t.backupSkipped,
+			"failed":  t.backupFailed,
+			"current": t.backupCurrent,
+		},
 	}
 	if !t.running && !t.finished.IsZero() {
 		res["finishedAt"] = t.finished
@@ -613,12 +654,15 @@ func (s *Server) runDownload(ctx context.Context, task *DownloadTask, cfg Config
 				return
 			}
 			task.setCurrent(item.Artist + " - " + item.Name)
-			res := s.downloadOne(ctx, client, cfg, item, types, lg, &coverMu, coverDone)
+			res, tgt := s.downloadOne(ctx, client, cfg, item, types, lg, &coverMu, coverDone)
 			switch res {
 			case dlSkipped:
 				task.incSkipped()
 			case dlOK:
 				task.incDone()
+				if tgt != nil {
+					task.addBackupTarget(*tgt)
+				}
 			case dlFailed:
 				task.addFailure(item, item.Artist+" - "+item.Name)
 			}
@@ -628,6 +672,12 @@ func (s *Server) runDownload(ctx context.Context, task *DownloadTask, cfg Config
 
 	// 统一修正属主（助手以 root 运行，落盘文件需归 navidrome，避免后续库操作受限）
 	chownTree(cfg.DownloadDir)
+
+	// 备份到网盘（防丢失）：把本轮成功歌曲的音频/歌词/封面上传到「RemoteRoot/本地目录名/…」。
+	// 默认开启（配置 backupToNetdisk=false 可关）；同名文件由 baidupcs 跳过，重复执行幂等。
+	if cfg.BackupToNetdisk {
+		s.backupToNetdisk(ctx, task, cfg, lg)
+	}
 
 	msg := ""
 	if ctx.Err() != nil {
@@ -658,9 +708,10 @@ const (
 )
 
 // downloadOne 下载单首：音频 +（可选）歌词 +（可选）封面。
+// 成功时返回待备份文件清单（供下载完成后的网盘备份阶段使用；失败返回 nil）。
 func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Config,
 	item DownloadItem, types []string, lg func(string, ...any),
-	coverMu *sync.Mutex, coverDone map[string]bool) dlResult {
+	coverMu *sync.Mutex, coverDone map[string]bool) (dlResult, *backupTarget) {
 
 	// 0) 归一化三个文本字段。目录名、文件名、写入的标签必须都取自这份归一化结果，
 	// 否则上游返回的隐形空白会让同一艺人的歌分裂到不同目录，或写出的标签搜不到。
@@ -679,12 +730,12 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 	audioPath, err := ensureWithin(cfg.DownloadDir, filepath.Join(artistDir, stem+ext))
 	if err != nil {
 		lg("路径校验失败（跳过）: %s - %s (%v)", item.Artist, item.Name, err)
-		return dlFailed
+		return dlFailed, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(audioPath), 0o755); err != nil {
 		lg("创建目录失败: %v", err)
-		return dlFailed
+		return dlFailed, nil
 	}
 
 	// 2) 音频（增量：已存在且非空且未开覆盖 → 跳过）
@@ -696,7 +747,7 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 		} else {
 			if err := s.fetchStream(ctx, client, cfg, item, audioPath, lg); err != nil {
 				lg("音频下载失败: %s - %s (%v)", item.Artist, item.Name, err)
-				return dlFailed
+				return dlFailed, nil
 			}
 			downloaded = true
 			lg("音频完成: %s", audioPath)
@@ -715,8 +766,9 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 	// 2.2) 歌词：下载/读取同名 .lrc，并拿到歌词文本（下一步写入内嵌标签）。
 	// 顺序调整原因：内嵌歌词要与元数据在同一次 ffmpeg 调用中写入，减少一次文件重写。
 	lyricText := ""
+	lrcPath := "" // 提升作用域：结尾构建备份清单时要用
 	if containsTypes(types, "lyric") {
-		lrcPath := strings.TrimSuffix(audioPath, ext) + ".lrc"
+		lrcPath = strings.TrimSuffix(audioPath, ext) + ".lrc"
 		if st, statErr := os.Stat(lrcPath); statErr == nil && st.Size() > 0 && !cfg.DownloadOverwrite {
 			// 已存在：读取内容，供「文件缺内嵌歌词时补写」使用（如历史下载的文件）
 			if b, rerr := os.ReadFile(lrcPath); rerr == nil {
@@ -765,7 +817,26 @@ func (s *Server) downloadOne(ctx context.Context, client *http.Client, cfg Confi
 		}
 	}
 
-	return dlOK
+	// 构建待备份清单：所有文件都「存在才带」（备份以防丢失为目的，宁可多传）。
+	// 封面独立于本次 types 判断——目录里已有 cover.jpg（历史下载）也应备份；
+	// 音频可能不存在（只勾了歌词）——此时仅备份实际存在的文件。
+	tgt := &backupTarget{dir: filepath.Dir(audioPath)}
+	if st, statErr := os.Stat(audioPath); statErr == nil && st.Size() > 0 {
+		tgt.audio = audioPath
+	}
+	if lrcPath != "" {
+		if st, statErr := os.Stat(lrcPath); statErr == nil && st.Size() > 0 {
+			tgt.lrc = lrcPath
+		}
+	}
+	coverPath := filepath.Join(filepath.Dir(audioPath), "cover.jpg")
+	if st, statErr := os.Stat(coverPath); statErr == nil && st.Size() > 0 {
+		tgt.cover = coverPath
+	}
+	if tgt.audio == "" && tgt.lrc == "" {
+		return dlOK, nil // 没有任何可备份内容
+	}
+	return dlOK, tgt
 }
 
 // ---------------------------------------------------------------------------
