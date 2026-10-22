@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -103,6 +104,14 @@ type Config struct {
 	// 目标目录 = RemoteRoot + 本地下载目录名（如 /apps/Cloud Sync/music/在线音乐）。
 	// 页面暂未提供开关；如需关闭可手工改配置文件。
 	BackupToNetdisk bool `json:"backupToNetdisk"`
+
+	// LoginCheckMinutes 网盘登录态自检间隔（分钟），0 = 关闭。
+	// 百度 BDUSS 过期不会通知任何人，只能主动探：定时探到失效就记状态并在页面告警，
+	// 免得等同步失败才发现（那时是凌晨 3 点，没人看得见）。
+	LoginCheckMinutes int `json:"loginCheckMinutes"`
+	// AlertWebhook 登录失效时的告警地址（可选，HTTP POST JSON）。
+	// 留空只做页面告警与审计日志；填企业微信/钉钉机器人地址即可推到手机。
+	AlertWebhook string `json:"alertWebhook"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -145,6 +154,8 @@ func DefaultConfig() Config {
 		TagMetadata:         true,
 		// 下载完成后自动备份到网盘（防丢失）；同名文件由 baidupcs 跳过，幂等
 		BackupToNetdisk: true,
+		// 每小时自检一次登录态；失效时页面告警 + 审计日志 + 可选 Webhook
+		LoginCheckMinutes: 60,
 	}
 }
 
@@ -156,6 +167,11 @@ type State struct {
 	LastSyncMsg   string    `json:"lastSyncMsg"`
 	LastRunDay    string    `json:"lastRunDay"`  // daily 模式：已执行的日期（YYYY-MM-DD）
 	LastRunTime   time.Time `json:"lastRunTime"` // interval 模式：上次执行时间
+
+	// 登录失效告警：非零表示当前处于「已告警未恢复」状态。
+	// 只记首次发现时间，避免每小时重复刷告警；重新登录成功后清零。
+	LoginAlertSince time.Time `json:"loginAlertSince"`
+	LoginAlertMsg   string    `json:"loginAlertMsg"`
 }
 
 // Request / Response：Unix socket 上的一问一答协议。
@@ -183,6 +199,12 @@ type Server struct {
 	syncTask *SyncTask
 	// downloadTask 在线下载任务（与同步任务相互独立，可并行）
 	downloadTask *DownloadTask
+
+	// 登录态真实探测的缓存：who 只读本地配置（cookie 过期照样报已登录），
+	// 必须真发一次请求才知道能不能用，但状态接口会被前端轮询，所以缓存一段时间。
+	loginProbeAt  time.Time
+	loginProbeOK  bool
+	loginProbeMsg string
 }
 
 func main() {
@@ -219,6 +241,8 @@ func main() {
 	}()
 	// 启动内置调度器
 	go s.scheduleLoop()
+	// 网盘登录态定时自检：cookie 过期后不必等同步失败才发现
+	go s.loginWatchLoop()
 
 	if err := s.serve(); err != nil {
 		log.Fatalf("服务启动失败: %v", err)
@@ -282,6 +306,104 @@ func (s *Server) saveStateLocked() {
 		return
 	}
 	_ = atomicWrite(s.statePath, append(b, '\n'), 0o600)
+}
+
+// loginWatchLoop 定时自检网盘登录态。
+//
+// 百度 BDUSS 过期不会有任何通知，只能主动探测：
+// 探到失效就记录告警状态（页面红色横幅 + 审计日志 + 可选 Webhook），
+// 恢复后自动清除，避免每小时重复打扰。
+func (s *Server) loginWatchLoop() {
+	for {
+		s.mu.Lock()
+		minutes := s.cfg.LoginCheckMinutes
+		bin := s.cfg.BaidupcsBin
+		s.mu.Unlock()
+
+		if minutes <= 0 || bin == "" {
+			// 关闭状态：隔一会儿再读一次配置（配置随时可能被页面改）
+			time.Sleep(time.Minute)
+			continue
+		}
+
+		ok, msg := s.probeLoginForce(bin)
+		s.applyLoginAlert(ok, msg)
+		time.Sleep(time.Duration(minutes) * time.Minute)
+	}
+}
+
+// applyLoginAlert 根据探测结果维护告警状态，只在「刚刚失效 / 刚刚恢复」时动手。
+func (s *Server) applyLoginAlert(ok bool, msg string) {
+	s.mu.Lock()
+	if ok {
+		hadAlert := !s.state.LoginAlertSince.IsZero()
+		if hadAlert {
+			s.state.LoginAlertSince = time.Time{}
+			s.state.LoginAlertMsg = ""
+			s.saveStateLocked()
+		}
+		hook := s.cfg.AlertWebhook
+		s.mu.Unlock()
+		if hadAlert {
+			s.audit("网盘登录态已恢复，清除告警")
+			s.postWebhook(hook, "【Navidrome】网盘登录已恢复", "百度网盘登录态自检已通过，同步功能正常。")
+		}
+		return
+	}
+	if msg == "" {
+		msg = "百度网盘登录已失效"
+	}
+	// 已经告过警就不重复刷（每小时一条会淹没审计日志）
+	if !s.state.LoginAlertSince.IsZero() {
+		s.mu.Unlock()
+		return
+	}
+	s.state.LoginAlertSince = time.Now()
+	s.state.LoginAlertMsg = msg
+	s.saveStateLocked()
+	hook := s.cfg.AlertWebhook
+	s.mu.Unlock()
+
+	s.audit("网盘登录态失效告警: %s", msg)
+	log.Printf("[nd-helper] 网盘登录态失效: %s", msg)
+	s.postWebhook(hook, "【Navidrome】网盘登录已失效",
+		msg+"\n请打开 Navidrome「同步」页面点「更新凭据」，粘贴新的 Cookie。")
+}
+
+// postWebhook 把告警 POST 到配置的地址（企业微信/钉钉/Slack 机器人均可）。
+// 失败只记日志：告警通道本身不能影响主流程。
+func (s *Server) postWebhook(url, title, body string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": title + "\n" + body},
+		// 兼容通用 webhook：同时给出常见字段
+		"title":   title,
+		"content": body,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	if err != nil {
+		log.Printf("[nd-helper] 告警 Webhook 构造失败: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[nd-helper] 告警 Webhook 发送失败: %v", err)
+		return
+	}
+	_ = resp.Body.Close()
+}
+
+// probeLoginForce 忽略缓存强制真实探测（自检用）。
+func (s *Server) probeLoginForce(bin string) (bool, string) {
+	s.invalidateLoginProbe()
+	return s.probeLogin(bin)
 }
 
 // markInterruptedSync 检测并标记「上次同步未正常结束」（进程被杀导致的静默中断）。
@@ -431,6 +553,16 @@ func (s *Server) dispatch(req Request) (any, error) {
 		return s.actionConfigSet(cfg)
 	case "login_status":
 		return s.actionLoginStatus()
+	case "login_cookie":
+		var p struct {
+			Cookie string `json:"cookie"`
+			BDUSS  string `json:"bduss"`
+			SToken string `json:"stoken"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return nil, fmt.Errorf("登录参数解析失败: %w", err)
+		}
+		return s.actionLoginCookie(p.Cookie, p.BDUSS, p.SToken)
 	case "sync_start":
 		var p struct {
 			Mode  string   `json:"mode"`
@@ -517,7 +649,10 @@ func (s *Server) actionStatus() (any, error) {
 		"lastSync":    lastSync,
 		"lastSyncOK":  st.LastSyncOK,
 		"lastSyncMsg": st.LastSyncMsg,
-		"trashCount":  len(s.readTrashIndex()),
+		// 登录失效告警（自检线程维护），前端据此显示常驻红色横幅
+		"loginAlertSince": st.LoginAlertSince,
+		"loginAlertMsg":   st.LoginAlertMsg,
+		"trashCount":      len(s.readTrashIndex()),
 	}, nil
 }
 
@@ -662,9 +797,125 @@ func parseHHMM(v string) (int, int, error) {
 	return h, m, nil
 }
 
-// actionLoginStatus 读取百度登录态（调用 baidupcs who）。
+// actionLoginStatus 读取百度登录态（调用 baidupcs who + 真实探测）。
 func (s *Server) actionLoginStatus() (any, error) {
 	return s.loginStatus()
+}
+
+// loginProbeTTL 登录态真实探测结果的最短复用间隔。
+// 前端状态接口会轮询，每次探测都要打一次百度接口，缓存把频率压到每分钟一次。
+const loginProbeTTL = 60 * time.Second
+
+// actionLoginCookie 用页面提交的 Cookie / BDUSS 登录百度网盘。
+//
+// 目的：cookie 过期后管理员不必再登上服务器执行脚本，直接在「同步」页面更新即可。
+// 凭据只写入 root 的 BaiduPCS-Go 配置，不落日志、不进状态响应（只回 uid/用户名）。
+func (s *Server) actionLoginCookie(cookie, bduss, stoken string) (any, error) {
+	cookie = normalizeCookie(cookie)
+	bduss = strings.TrimSpace(bduss)
+	stoken = strings.TrimSpace(stoken)
+	if cookie == "" && bduss == "" {
+		return nil, errors.New("请填写 Cookie，或至少填写 BDUSS")
+	}
+	if cookie != "" && !strings.Contains(cookie, "=") {
+		return nil, errors.New("Cookie 格式不正确，应形如 BDUSS=xxx; STOKEN=yyy")
+	}
+	s.mu.Lock()
+	bin := s.cfg.BaidupcsBin
+	s.mu.Unlock()
+	if bin == "" {
+		return nil, errors.New("未配置 baidupcs 可执行文件路径")
+	}
+
+	// 注意：baidupcs 只支持命令行传参登录，凭据会在极短时间内出现在进程参数里；
+	// 本机只有 root 与服务的 systemd 用户能读，属可接受风险（相比无法登录，代价明确更小）。
+	args := []string{"login"}
+	if cookie != "" {
+		args = append(args, "-cookies="+cookie)
+	} else {
+		args = append(args, "-bduss="+bduss)
+		if stoken != "" {
+			args = append(args, "-stoken="+stoken)
+		}
+	}
+	out, err := runCmd(60*time.Second, nil, bin, args...)
+	if err != nil {
+		// 审计与错误信息里都不带凭据，只留错误原因
+		s.audit("login_cookie 失败: %v", err)
+		return nil, fmt.Errorf("登录失败: %w（输出: %s）",
+			err, truncate(strings.TrimSpace(string(out)), 200))
+	}
+
+	// login 只写本地配置，必须再真发一次请求确认这份 cookie 真的能用
+	s.invalidateLoginProbe()
+	st, _ := s.loginStatus()
+	uid, _ := st["uid"].(string)
+	ok, _ := st["verified"].(bool)
+	if ok {
+		// 登录成功顺手清掉告警状态，页面横幅立即消失
+		s.applyLoginAlert(true, "")
+	}
+	s.audit("login_cookie 完成 uid=%s verified=%t", uid, ok)
+	return st, nil
+}
+
+// normalizeCookie 规整从浏览器整段粘贴的 Cookie。
+//
+// 支持 "BDUSS=x; STOKEN=y" 单行，也支持从 F12 里连换行一起复制过来的多行内容：
+// 去掉换行与多余空白，统一用 "; " 分隔，空片段丢弃。
+func normalizeCookie(raw string) string {
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// invalidateLoginProbe 让下一次状态查询重新做真实探测（登录刚变过时必须调）。
+func (s *Server) invalidateLoginProbe() {
+	s.mu.Lock()
+	s.loginProbeAt = time.Time{}
+	s.mu.Unlock()
+}
+
+// probeLogin 真实访问一次百度接口判断登录态是否仍然有效。
+//
+// who 读的是本地配置，cookie 过期后依旧显示已登录；quota 会真正发请求，
+// 失效时百度返回 -6「请重新登录」。结果按 loginProbeTTL 缓存。
+func (s *Server) probeLogin(bin string) (bool, string) {
+	s.mu.Lock()
+	if !s.loginProbeAt.IsZero() && time.Since(s.loginProbeAt) < loginProbeTTL {
+		ok, msg := s.loginProbeOK, s.loginProbeMsg
+		s.mu.Unlock()
+		return ok, msg
+	}
+	s.mu.Unlock()
+
+	out, err := runCmd(20*time.Second, nil, bin, "quota")
+	ok := err == nil
+	msg := ""
+	if err != nil {
+		msg = strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		if strings.Contains(msg, "请重新登录") || strings.Contains(msg, "代码: -6") {
+			msg = "百度网盘登录已失效（Cookie 已过期或被踢下线），请更新 Cookie"
+		}
+		msg = truncate(msg, 200)
+	}
+
+	s.mu.Lock()
+	s.loginProbeAt, s.loginProbeOK, s.loginProbeMsg = time.Now(), ok, msg
+	s.mu.Unlock()
+	return ok, msg
 }
 
 func (s *Server) loginStatus() (map[string]any, error) {
@@ -673,7 +924,13 @@ func (s *Server) loginStatus() (map[string]any, error) {
 	s.mu.Unlock()
 
 	out, err := runCmd(20*time.Second, nil, bin, "who")
-	res := map[string]any{"loggedIn": false, "raw": strings.TrimSpace(string(out)), "error": ""}
+	res := map[string]any{
+		"loggedIn":    false,
+		"raw":         strings.TrimSpace(string(out)),
+		"error":       "",
+		"verified":    false,
+		"verifyError": "",
+	}
 	if err != nil {
 		res["error"] = err.Error()
 		return res, nil
@@ -685,6 +942,13 @@ func (s *Server) loginStatus() (map[string]any, error) {
 		res["uid"] = uid
 		if name := parseUserName(strings.TrimSpace(string(out))); name != "" {
 			res["userName"] = name
+		}
+		// who 只读本地配置，cookie 过期时照样报已登录，
+		// 必须再真发一次请求才能判断能不能用（否则同步失败前页面一直显示正常）
+		verified, verifyErr := s.probeLogin(bin)
+		res["verified"] = verified
+		if !verified {
+			res["verifyError"] = verifyErr
 		}
 	}
 	return res, nil

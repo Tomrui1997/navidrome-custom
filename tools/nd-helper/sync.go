@@ -366,6 +366,11 @@ func (s *Server) execSync(task *SyncTask, cfg Config) error {
 	// 预检远端目录：baidupcs 遇到不存在的目录或网络故障时，download 会「零输出 + 退出码 0」，
 	// 只靠事后扫日志会把这种情况误判成“同步完成”，所以同步前先 ls 一次探明。
 	task.setStage("preflight")
+	// 登录态先探一次：cookie 过期时这里直接给出「请更新 Cookie」，
+	// 而不是让人对着 -6「请重新登录」的原始报错猜。
+	if ok, msg := s.probeLogin(cfg.BaidupcsBin); !ok && msg != "" {
+		return errors.New(msg)
+	}
 	if err := s.preflightRemote(cfg); err != nil {
 		return err
 	}

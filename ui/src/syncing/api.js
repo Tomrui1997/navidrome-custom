@@ -18,6 +18,14 @@ export const syncCancel = () =>
     (r) => r.json,
   )
 
+// syncLogin 用 Cookie / BDUSS 更新百度网盘登录态。
+// 解决 cookie 过期后必须上服务器执行脚本才能重新登录的问题。
+export const syncLogin = ({ cookie = '', bduss = '', stoken = '' }) =>
+  httpClient(`${REST_URL}/baidusync/login`, {
+    method: 'POST',
+    body: JSON.stringify({ cookie, bduss, stoken }),
+  }).then((r) => r.json)
+
 export const syncConfigGet = () =>
   httpClient(`${REST_URL}/baidusync/config`).then((r) => r.json)
 

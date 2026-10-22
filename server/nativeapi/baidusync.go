@@ -20,6 +20,7 @@ func (api *Router) addBaiduSyncRoute(r chi.Router) {
 
 	r.Route("/baidusync", func(r chi.Router) {
 		r.Get("/status", handleSyncStatus(client))
+		r.Post("/login", handleSyncLogin(client))
 		r.Post("/sync", handleSyncStart(client))
 		r.Post("/cancel", handleSyncCancel(client))
 		r.Get("/config", handleSyncConfigGet(client))
@@ -51,6 +52,31 @@ func handleSyncStatus(client *baidusync.Client) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, st)
+	}
+}
+
+// handleSyncLogin 用页面提交的 Cookie / BDUSS 登录百度网盘。
+//
+// 解决「cookie 过期后必须上服务器执行脚本才能重新登录」的老问题。
+// 凭据只在请求体里经过一次内存，不落库、不记日志。
+func handleSyncLogin(client *baidusync.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Cookie string `json:"cookie"`
+			BDUSS  string `json:"bduss"`
+			SToken string `json:"stoken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败: " + err.Error()})
+			return
+		}
+		res, err := client.LoginCookie(r.Context(), body.Cookie, body.BDUSS, body.SToken)
+		if err != nil {
+			writeHelperError(w, r.Context(), err)
+			return
+		}
+		log.Info(r.Context(), "已更新百度网盘登录凭据", "uid", res.UID, "verified", res.Verified)
+		writeJSON(w, http.StatusOK, res)
 	}
 }
 

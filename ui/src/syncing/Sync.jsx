@@ -6,6 +6,11 @@ import {
   CardHeader,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   FormControlLabel,
   Grid,
@@ -21,6 +26,7 @@ import {
   Typography,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
+import Alert from '@material-ui/lab/Alert'
 import { Title, useNotify, usePermissions, useTranslate } from 'react-admin'
 import RefreshIcon from '@material-ui/icons/Refresh'
 import PlayArrowIcon from '@material-ui/icons/PlayArrow'
@@ -45,8 +51,30 @@ const useStyles = makeStyles((theme) => ({
   row: { display: 'flex', alignItems: 'center', gap: theme.spacing(1) },
   logDate: { minWidth: 160, marginLeft: theme.spacing(2) },
   statusChip: { marginRight: theme.spacing(1) },
+  loginAlert: { marginBottom: theme.spacing(1.5) },
   progress: { marginTop: theme.spacing(1) },
 }))
+
+// 登录态文案：
+// - 未登录 → 提示去更新凭据（不再提「请先在服务器上登录」，现在页面就能做）
+// - 已登录但真实探测失败 → 明确报「已失效」并带出原因
+// - 正常 → 显示账号名
+const loginLabel = (translate, login) => {
+  if (!login.loggedIn) {
+    return translate('resources.sync.login.notLoggedIn')
+  }
+  const who = login.userName || login.uid
+  if (login.verified === false) {
+    return `${translate('resources.sync.login.expired')}: ${login.verifyError || who}`
+  }
+  return `${translate('resources.sync.login.loggedIn')}: ${who}`
+}
+
+// 未登录 / 已失效都用警示色，避免「看起来正常其实不能用」。
+const loginColor = (login) => {
+  if (!login.loggedIn || login.verified === false) return 'secondary'
+  return 'primary'
+}
 
 // 进度文案：已处理 = 已下载 + 已跳过。
 // 增量同步下绝大多数文件是「已存在跳过」，若只显示下载数，进度会长时间停在 0/N（看起来像卡死）。
@@ -146,6 +174,14 @@ const Sync = () => {
   const [saving, setSaving] = useState(false)
   const [busy, setBusy] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  // 网盘凭据更新对话框：cookie 过期后不必再上服务器，直接在页面粘贴新的
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [loginForm, setLoginForm] = useState({
+    cookie: '',
+    bduss: '',
+    stoken: '',
+  })
+  const [loginBusy, setLoginBusy] = useState(false)
 
   const load = useCallback(
     async ({ withLog = true } = {}) => {
@@ -201,6 +237,35 @@ const Sync = () => {
           : e.target.value
         : e
     setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  // submitLogin 提交新的 Cookie / BDUSS 并刷新状态。
+  // 后端登录后会真发一次请求校验，这里按 verified 给不同提示。
+  const submitLogin = async () => {
+    setLoginBusy(true)
+    try {
+      const res = await api.syncLogin(loginForm)
+      if (res && res.verified) {
+        notify(
+          translate('resources.sync.login.updated', {
+            account: res.userName || res.uid || '',
+          }),
+          { type: 'info' },
+        )
+        setLoginOpen(false)
+        setLoginForm({ cookie: '', bduss: '', stoken: '' })
+      } else {
+        notify(
+          (res && res.verifyError) || translate('resources.sync.login.updateFailed'),
+          { type: 'warning' },
+        )
+      }
+      await load()
+    } catch (err) {
+      notify(api.errMessage(err), { type: 'warning' })
+    } finally {
+      setLoginBusy(false)
+    }
   }
 
   const handleSync = async (mode) => {
@@ -283,6 +348,8 @@ const Sync = () => {
 
   const task = (status && status.task) || {}
   const login = (status && status.login) || {}
+  // 后台自检记录的告警（loginAlertSince 非零表示已告警未恢复）
+  const loginAlert = !!(status && status.loginAlertSince)
 
   return (
     <Card className={classes.root}>
@@ -301,18 +368,43 @@ const Sync = () => {
         }
       />
       <CardContent>
+        {/* ---------- 登录失效常驻告警 ---------- */}
+        {/* 后台每小时自检登录态，失效时一直挂在这里，直到重新登录成功 */}
+        {(loginAlert || login.verified === false) && (
+          <Alert
+            severity="error"
+            className={classes.loginAlert}
+            action={
+              <Button color="inherit" size="small" onClick={() => setLoginOpen(true)}>
+                {translate('resources.sync.login.updateAction')}
+              </Button>
+            }
+          >
+            {translate('resources.sync.login.alertBanner', {
+              msg:
+                status.loginAlertMsg ||
+                login.verifyError ||
+                translate('resources.sync.login.expired'),
+            })}
+          </Alert>
+        )}
         {/* ---------- 状态 ---------- */}
         <div className={classes.row}>
           <Chip
             className={classes.statusChip}
             size="small"
-            color={login.loggedIn ? 'primary' : 'secondary'}
-            label={
-              login.loggedIn
-                ? `${translate('resources.sync.login.loggedIn')}: ${login.userName || login.uid}`
-                : translate('resources.sync.login.notLoggedIn')
-            }
+            color={loginColor(login)}
+            label={loginLabel(translate, login)}
           />
+          {/* cookie 过期时 who 仍报「已登录」，必须靠后端真实探测结果提示，
+              否则用户只有等同步失败才知道，且还得上服务器才能修 */}
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => setLoginOpen(true)}
+          >
+            {translate('resources.sync.login.updateAction')}
+          </Button>
           <Chip
             className={classes.statusChip}
             size="small"
@@ -712,6 +804,81 @@ const Sync = () => {
           </TableBody>
         </Table>
       </CardContent>
+
+      {/* 网盘凭据更新：cookie 过期后直接在这里粘贴新的，不用再登服务器跑脚本 */}
+      <Dialog
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {translate('resources.sync.login.dialogTitle')}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {translate('resources.sync.login.dialogHelp')}
+          </DialogContentText>
+          <TextField
+            margin="dense"
+            label={translate('resources.sync.login.cookieLabel')}
+            placeholder={translate('resources.sync.login.cookiePlaceholder')}
+            value={loginForm.cookie}
+            onChange={(e) =>
+              setLoginForm((p) => ({ ...p, cookie: e.target.value }))
+            }
+            fullWidth
+            multiline
+            minRows={3}
+            variant="outlined"
+          />
+          <Grid container spacing={2}>
+            <Grid item xs={6}>
+              <TextField
+                margin="dense"
+                label="BDUSS"
+                value={loginForm.bduss}
+                onChange={(e) =>
+                  setLoginForm((p) => ({ ...p, bduss: e.target.value }))
+                }
+                helperText={translate('resources.sync.login.bdussHelp')}
+                fullWidth
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                margin="dense"
+                label="STOKEN"
+                value={loginForm.stoken}
+                onChange={(e) =>
+                  setLoginForm((p) => ({ ...p, stoken: e.target.value }))
+                }
+                helperText={translate('resources.sync.login.stokenHelp')}
+                fullWidth
+                variant="outlined"
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLoginOpen(false)} disabled={loginBusy}>
+            {translate('ra.action.cancel')}
+          </Button>
+          <Button
+            onClick={submitLogin}
+            color="primary"
+            variant="contained"
+            disabled={
+              loginBusy || (!loginForm.cookie.trim() && !loginForm.bduss.trim())
+            }
+          >
+            {loginBusy
+              ? translate('resources.sync.login.submitting')
+              : translate('resources.sync.login.submit')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Card>
   )
 }

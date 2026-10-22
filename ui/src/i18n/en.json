@@ -109,7 +109,20 @@
       "subtitle": "Incremental sync of songs and lyrics from Baidu Netdisk, with recycle bin for safe deletion",
       "login": {
         "loggedIn": "Netdisk account",
-        "notLoggedIn": "Netdisk account not logged in (login on the server first)"
+        "notLoggedIn": "Netdisk account not logged in (use the button on the right to paste a cookie)",
+        "expired": "Netdisk login expired",
+        "updateAction": "Update credentials",
+        "dialogTitle": "Update Baidu Netdisk credentials",
+        "dialogHelp": "Sign in to pan.baidu.com, open F12 → Network, refresh the page, pick the first request and copy the whole Cookie header value here. It is written to the server's BaiduPCS-Go config only - never stored in the page or database.",
+        "cookieLabel": "Cookie (recommended, paste the whole string)",
+        "cookiePlaceholder": "BDUSS=xxxxxx; STOKEN=yyyyyy; ...",
+        "bdussHelp": "Or provide BDUSS only (used when Cookie is empty)",
+        "stokenHelp": "STOKEN is optional, needed for transfer/share",
+        "submit": "Sign in and verify",
+        "submitting": "Verifying…",
+        "updated": "Netdisk credentials updated and verified: {{account}}",
+        "updateFailed": "Credentials submitted but verification failed - check the cookie is complete and still valid",
+        "alertBanner": "Netdisk login expired, sync will fail: {{msg}} (use the button on the right to paste a new cookie)"
       },
       "task": {
         "running": "Syncing",

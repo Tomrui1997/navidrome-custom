@@ -221,11 +221,17 @@ type DownloadTask struct {
 }
 
 // Login 百度登录态。
+//
+// Verified 表示「真发一次请求确认 cookie 还能用」的结果：
+// who 只读服务器本地配置，cookie 过期后依旧显示已登录，
+// 所以前端必须以 Verified 判断是否真的可用，VerifyError 给出人话原因。
 type Login struct {
-	LoggedIn bool   `json:"loggedIn"`
-	UID      string `json:"uid"`
-	UserName string `json:"userName"`
-	Error    string `json:"error"`
+	LoggedIn    bool   `json:"loggedIn"`
+	UID         string `json:"uid"`
+	UserName    string `json:"userName"`
+	Error       string `json:"error"`
+	Verified    bool   `json:"verified"`
+	VerifyError string `json:"verifyError"`
 }
 
 // Task 同步任务状态。
@@ -333,6 +339,23 @@ func (c *Client) GetConfig(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoginCookie 用页面提交的 Cookie / BDUSS 登录百度网盘。
+//
+// 目的：cookie 过期后不必再上服务器执行脚本，管理员在「同步」页面更新即可。
+// 返回的 Login 里 Verified 表示登录后真实探测是否通过。
+func (c *Client) LoginCookie(ctx context.Context, cookie, bduss, stoken string) (*Login, error) {
+	params := map[string]string{
+		"cookie": cookie,
+		"bduss":  bduss,
+		"stoken": stoken,
+	}
+	var res Login
+	if err := c.Call(ctx, "login_cookie", params, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // SetConfig 保存配置。

@@ -109,7 +109,20 @@
       "subtitle": "从百度网盘增量同步歌曲与歌词，删除走回收站更安全",
       "login": {
         "loggedIn": "网盘账号",
-        "notLoggedIn": "网盘账号未登录（请先在服务器上登录）"
+        "notLoggedIn": "网盘账号未登录（点右侧按钮粘贴 Cookie 即可）",
+        "expired": "网盘登录已失效",
+        "updateAction": "更新凭据",
+        "dialogTitle": "更新百度网盘登录凭据",
+        "dialogHelp": "在浏览器登录 pan.baidu.com 后按 F12 → Network，刷新页面，找到第一条请求，把请求头里 Cookie 的整段内容复制到这里。内容只写入服务器的 BaiduPCS-Go 配置，不会保存在页面或数据库。",
+        "cookieLabel": "Cookie（推荐，整段粘贴即可）",
+        "cookiePlaceholder": "BDUSS=xxxxxx; STOKEN=yyyyyy; ...",
+        "bdussHelp": "或只填 BDUSS（Cookie 留空时使用）",
+        "stokenHelp": "STOKEN 可选，转存/分享需要",
+        "submit": "登录并校验",
+        "submitting": "校验中…",
+        "updated": "已更新网盘凭据并通过校验：{{account}}",
+        "updateFailed": "凭据已提交，但校验未通过，请检查 Cookie 是否完整或已失效",
+        "alertBanner": "网盘登录已失效，同步会失败：{{msg}}（点右侧按钮粘贴新 Cookie 即可恢复）"
       },
       "task": {
         "running": "同步中",
