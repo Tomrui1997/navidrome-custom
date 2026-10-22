@@ -15,7 +15,7 @@
 | 前端 | React + react-admin v3 + MUI v4（`ui/`，npm） |
 | 自建模块 | `tools/nd-helper/`（root 特权助手）、`core/baidusync/`（socket 客户端）、`server/nativeapi/{baidusync,mediaops}.go`、`ui/src/syncing/`、`ui/src/common/DeleteSongsButton.jsx` |
 | 测试环境 | `192.168.171.128`（CentOS 8，glibc 2.28，二进制 + systemd） |
-| 生产环境 | `124.222.150.220`（CentOS Stream 9，nginx 子路径 `/music`）；**对外访问一律用域名 `https://lxssc.com`，禁止用 IP 访问**（nginx 已配置 IP 直连拦截） |
+| 生产环境 | `124.222.150.220`（CentOS Stream 9，nginx 子路径 `/music`）；**对外访问一律用域名 `https://lxssc.com`，禁止用 IP 访问**（nginx：IP 直连拦截 + 80 强制跳 HTTPS，acme 校验路径除外） |
 
 ## 二、固定要求
 
