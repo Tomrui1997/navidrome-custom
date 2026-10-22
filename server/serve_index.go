@@ -29,6 +29,15 @@ func IndexWithShare(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.H
 	return serveIndex(ds, fs, shareInfo)
 }
 
+// htmlLang 把默认语言配置转成 <html lang> 可用的值。
+// 未配置时退回 en，与前端 i18n 的回退保持一致。
+func htmlLang(lang string) string {
+	if strings.TrimSpace(lang) == "" {
+		return "en"
+	}
+	return lang
+}
+
 // Injects the config in the `index.html` template
 func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +114,9 @@ func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.Handl
 		data := map[string]any{
 			"AppConfig": string(appConfigJson),
 			"Version":   version,
+			// 首屏 <html lang> 跟着默认语言走：留空会退回 en，
+			// 读屏软件与浏览器翻译据此判断页面语言
+			"HtmlLang": htmlLang(conf.Server.DefaultLanguage),
 		}
 		addShareData(r, data, shareInfo)
 
