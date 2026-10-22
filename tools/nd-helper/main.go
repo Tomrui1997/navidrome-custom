@@ -887,8 +887,14 @@ func (s *Server) invalidateLoginProbe() {
 
 // probeLogin 真实访问一次百度接口判断登录态是否仍然有效。
 //
-// who 读的是本地配置，cookie 过期后依旧显示已登录；quota 会真正发请求，
-// 失效时百度返回 -6「请重新登录」。结果按 loginProbeTTL 缓存。
+// 为什么不用 who / quota：
+//   - who 读的是本地配置，cookie 过期后依旧显示已登录；
+//   - quota 在 cookie 失效时返回「总空间: 0B, 已用空间: 0B」且**退出码仍是 0**，
+//     按退出码判断会误判成正常（实测踩过）。
+//
+// 所以直接跑同步真正依赖的那条命令：ls <远端根目录>。cookie 失效时它的输出里
+// 一定带「代码: -6 / 请重新登录」，用文本判断比退出码可靠。
+// 结果按 loginProbeTTL 缓存，避免前端轮询把百度接口打爆。
 func (s *Server) probeLogin(bin string) (bool, string) {
 	s.mu.Lock()
 	if !s.loginProbeAt.IsZero() && time.Since(s.loginProbeAt) < loginProbeTTL {
@@ -896,26 +902,47 @@ func (s *Server) probeLogin(bin string) (bool, string) {
 		s.mu.Unlock()
 		return ok, msg
 	}
+	root := s.cfg.RemoteRoot
 	s.mu.Unlock()
 
-	out, err := runCmd(20*time.Second, nil, bin, "quota")
-	ok := err == nil
-	msg := ""
-	if err != nil {
-		msg = strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		if strings.Contains(msg, "请重新登录") || strings.Contains(msg, "代码: -6") {
-			msg = "百度网盘登录已失效（Cookie 已过期或被踢下线），请更新 Cookie"
-		}
-		msg = truncate(msg, 200)
-	}
+	ok, msg := s.probeRemoteList(bin, root)
 
 	s.mu.Lock()
 	s.loginProbeAt, s.loginProbeOK, s.loginProbeMsg = time.Now(), ok, msg
 	s.mu.Unlock()
 	return ok, msg
+}
+
+// probeRemoteList 跑一次 ls 判定远端是否可用（登录失效/目录不存在都会在这里暴露）。
+func (s *Server) probeRemoteList(bin, root string) (bool, string) {
+	out, err := runCmd(30*time.Second, nil, bin, "ls", root)
+	text := strings.TrimSpace(string(out))
+	if err == nil && !isAuthExpiredText(text) {
+		return true, ""
+	}
+	msg := text
+	if msg == "" && err != nil {
+		msg = err.Error()
+	}
+	if isAuthExpiredText(msg) {
+		msg = "百度网盘登录已失效（Cookie 已过期或被踢下线），请更新 Cookie"
+	}
+	return false, truncate(msg, 200)
+}
+
+// isAuthExpiredText 判断 baidupcs 输出是否是「登录失效」。
+// cookie 过期时退出码仍可能是 0，只能靠输出特征识别。
+func isAuthExpiredText(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.Contains(s, "请重新登录") {
+		return true
+	}
+	if strings.Contains(s, "代码: -6") || strings.Contains(s, "代码:-6") {
+		return true
+	}
+	return strings.Contains(s, "errno=-6") || strings.Contains(s, "ErrCode=-6")
 }
 
 func (s *Server) loginStatus() (map[string]any, error) {
