@@ -64,11 +64,11 @@ func (api *Router) handleMediaDelete(client *baidusync.Client) http.HandlerFunc 
 		}
 
 		// 组装待删除项：由库中记录反查本地路径，再映射为网盘路径
-		repo := api.ds.MediaFile(ctx)
+		repo := api.ds.MediaFile()
 		items := make([]baidusync.DeleteItem, 0, len(body.IDs))
 		results := make([]baidusync.DeleteResult, 0, len(body.IDs))
 		for _, id := range body.IDs {
-			mf, gerr := repo.Get(id)
+			mf, gerr := repo.Get(ctx, id)
 			if gerr != nil {
 				results = append(results, baidusync.DeleteResult{
 					ID: id, Local: "failed", Remote: "failed",
@@ -121,7 +121,7 @@ func (api *Router) handleMediaDelete(client *baidusync.Client) http.HandlerFunc 
 					log.Warn(ctx, "跳过库记录删除（文件侧失败）", "id", res.ID, "reason", res.Reason)
 					continue
 				}
-				if derr := repo.Delete(res.ID); derr != nil {
+				if derr := repo.Delete(ctx, res.ID); derr != nil {
 					log.Error(ctx, "删除库记录失败", "id", res.ID, derr)
 					continue
 				}

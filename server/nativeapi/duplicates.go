@@ -132,8 +132,8 @@ func dupBetterToKeep(a, b dupItem) bool {
 // 必须共用同一份判定逻辑，否则一旦两处漂移，就可能出现「界面显示为保留、校验却允许删除」
 // 这类危险的不一致。
 func (api *Router) collectDuplicates(ctx context.Context) ([]dupGroup, int, int, error) {
-	repo := api.ds.MediaFile(ctx)
-	all, err := repo.GetAll()
+	repo := api.ds.MediaFile()
+	all, err := repo.GetAll(ctx)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("读取媒体库失败: %w", err)
 	}

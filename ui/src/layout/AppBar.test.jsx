@@ -9,11 +9,13 @@ import config from '../config'
 
 let store
 
+const mocks = vi.hoisted(() => ({ resources: [] }))
+
 vi.mock('react-admin', () => ({
   AppBar: ({ userMenu }) => <div data-testid="appbar">{userMenu}</div>,
   useTranslate: () => (x) => x,
   usePermissions: () => ({ permissions: 'admin' }),
-  getResources: () => [],
+  getResources: () => mocks.resources,
   // 自建的「同步」「在线搜索」菜单项使用 MenuItemLink；mock 缺它会直接渲染报错。
   // 用 forwardRef + 具名函数，否则 SyncMenu/SearchMenu 传 ref 时 React 告警 / ESLint 报 display-name。
   MenuItemLink: React.forwardRef(function MenuItemLinkStub(
@@ -49,6 +51,7 @@ describe('<AppBar />', () => {
     config.devActivityPanel = true
     config.enableNowPlaying = true
     config.enableQuickConnect = false
+    mocks.resources = []
     store = createStore(combineReducers({ activity: activityReducer }), {
       activity: { nowPlayingCount: 0 },
     })
@@ -91,5 +94,23 @@ describe('<AppBar />', () => {
     )
     expect(screen.queryAllByText('menu.quickConnect.name')).toHaveLength(0)
     expect(screen.queryAllByText('menu.about')).not.toHaveLength(0)
+  })
+
+  it('uses the resource label for settings items when set', () => {
+    mocks.resources = [
+      {
+        name: 'player',
+        hasList: true,
+        options: { subMenu: 'settings', label: 'resources.player.menuName' },
+      },
+      { name: 'transcoding', hasList: true, options: { subMenu: 'settings' } },
+    ]
+    render(
+      <Provider store={store}>
+        <AppBar />
+      </Provider>,
+    )
+    expect(screen.getByText('resources.player.menuName')).toBeInTheDocument()
+    expect(screen.getByText('resources.transcoding.name')).toBeInTheDocument()
   })
 })

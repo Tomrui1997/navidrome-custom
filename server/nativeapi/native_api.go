@@ -60,25 +60,25 @@ func (api *Router) routes() http.Handler {
 	r := chi.NewRouter()
 
 	// Public
-	api.RX(r, "/translation", newTranslationRepository, false)
+	rx(r, "/translation", newTranslationRepository(), false)
 
 	// Protected
 	r.Group(func(r chi.Router) {
 		r.Use(server.Authenticator(api.ds))
 		r.Use(server.JWTRefresher)
 		r.Use(server.UpdateLastAccessMiddleware(api.ds))
-		api.RX(r, "/user", api.users.NewRepository, true)
-		api.R(r, "/song", model.MediaFile{}, false)
-		api.R(r, "/album", model.Album{}, false)
+		rx(r, "/user", api.users.Repository(), true)
+		rx(r, "/song", api.ds.MediaFile(), false)
+		rx(r, "/album", api.ds.Album(), false)
 		api.addArtistRoute(r)
-		api.R(r, "/genre", model.Genre{}, false)
-		api.R(r, "/player", model.Player{}, true)
-		api.R(r, "/transcoding", model.Transcoding{}, conf.Server.EnableTranscodingConfig)
+		rx(r, "/genre", api.ds.Genre(), false)
+		rx(r, "/player", api.ds.Player(), true)
+		rx(r, "/transcoding", api.ds.Transcoding(), conf.Server.EnableTranscodingConfig)
 		api.addRadioRoute(r)
-		api.R(r, "/tag", model.Tag{}, false)
-		api.R(r, "/scrobble", model.Scrobble{}, false)
+		rx(r, "/tag", api.ds.Tag(), false)
+		rx(r, "/scrobble", api.ds.Scrobble(), false)
 		if conf.Server.EnableSharing {
-			api.RX(r, "/share", api.share.NewRepository, true)
+			rx(r, "/share", api.share.Repository(), true)
 		}
 
 		api.addPlaylistRoute(r)
@@ -103,47 +103,38 @@ func (api *Router) routes() http.Handler {
 			api.addDuplicatesRoute(r)
 			// 在线音乐搜索与下载入库：会出网访问第三方音乐平台并写入音乐目录，仅管理员
 			api.addMusicSearchRoute(r)
-			api.RX(r, "/library", api.libs.NewRepository, true)
+			rx(r, "/library", api.libs.Repository(), true)
 		})
 	})
 
 	return r
 }
 
-func (api *Router) R(r chi.Router, pathPrefix string, model any, persistable bool) {
-	constructor := func(ctx context.Context) rest.Repository {
-		return api.ds.Resource(ctx, model)
-	}
-	api.RX(r, pathPrefix, constructor, persistable)
-}
-
-func (api *Router) RX(r chi.Router, pathPrefix string, constructor rest.RepositoryConstructor, persistable bool) {
+func rx[T any](r chi.Router, pathPrefix string, repo rest.Repository[T], persistable bool) {
 	r.Route(pathPrefix, func(r chi.Router) {
-		r.Get("/", rest.GetAll(constructor))
+		r.Get("/", rest.GetAll(repo))
 		if persistable {
-			r.Post("/", rest.Post(constructor))
+			r.Post("/", rest.Post(repo))
 		}
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(server.URLParamsMiddleware)
-			r.Get("/", rest.Get(constructor))
+			r.Get("/", rest.Get(repo))
 			if persistable {
-				r.Put("/", rest.Put(constructor))
-				r.Delete("/", rest.Delete(constructor))
+				r.Put("/", rest.Put(repo))
+				r.Delete("/", rest.Delete(repo))
 			}
 		})
 	})
 }
 
 func (api *Router) addPlaylistRoute(r chi.Router) {
-	constructor := func(ctx context.Context) rest.Repository {
-		return api.playlists.NewRepository(ctx)
-	}
+	repo := api.playlists.Repository()
 
 	r.Route("/playlist", func(r chi.Router) {
-		r.Get("/", rest.GetAll(constructor))
+		r.Get("/", rest.GetAll(repo))
 		r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Content-type") == "application/json" {
-				rest.Post(constructor)(w, r)
+				rest.Post(repo)(w, r)
 				return
 			}
 			createPlaylistFromM3U(api.playlists)(w, r)
@@ -151,9 +142,9 @@ func (api *Router) addPlaylistRoute(r chi.Router) {
 
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(server.URLParamsMiddleware)
-			r.Get("/", rest.Get(constructor))
-			r.Put("/", rest.Put(constructor))
-			r.Delete("/", rest.Delete(constructor))
+			r.Get("/", rest.Get(repo))
+			r.Put("/", rest.Put(repo))
+			r.Delete("/", rest.Delete(repo))
 			r.Post("/image", uploadPlaylistImage(api.playlists))
 			r.Delete("/image", deletePlaylistImage(api.playlists))
 		})
@@ -205,7 +196,7 @@ func (api *Router) addQueueRoute(r chi.Router) {
 
 func (api *Router) addMissingFilesRoute(r chi.Router) {
 	r.Route("/missing", func(r chi.Router) {
-		api.RX(r, "/", newMissingRepository(api.ds), false)
+		rx(r, "/", newMissingRepository(api.ds), false)
 		r.Delete("/", deleteMissingFiles(api.maintenance))
 	})
 }
